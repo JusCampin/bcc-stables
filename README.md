@@ -1,4 +1,39 @@
-# BCC Stables â€” Feather development
+# BCC Stables — Feather development
+
+Guarded purchase admission/payment, canonical registration, stored fulfillment,
+manual outbox, owned reads and durable selection have controlled live acceptance.
+Core/Assets/Economy integrate through public APIs. Native dispatch/bind/store has
+controlled multiplayer, ownership migration, isolation, replay and cleanup acceptance.
+
+Schema 6 adds audited process-end recovery; migration, controlled bound-generation
+release/replay, replacement-slot isolation and fresh preparation passed live. Schema 5 and its runtime process identity/dispatch receipts passed live checks.
+Console-only recovery refuses same-process uncertainty, missing evidence and live
+observers. It performs no entity lookup or deletion. Released revision 5 distinguishes
+process-end recovery from ordinary observed cleanup. See
+[native recovery](../../feather-scripts/gameplay-resource-docs/bcc-stables/NATIVE_RECOVERY.md).
+
+Registrations now include twenty-seven RPC routes and three session subscriptions.
+Purchase, proof, selection and call switches default off; controlled server tests
+retain selection/call/native switches enabled. Purchase UI and riding/follow/tack
+remain unavailable. Offline suite: 612/612 cases.
+
+Selected-horse call/current store controls use Core RPC; controlled call/bind,
+store/pending/disappearance and repeated empty store passed live. Use `BccStablesHorseCall` and `BccStablesHorseStore` without IDs.
+See [call controls](../../feather-scripts/gameplay-resource-docs/bcc-stables/HORSE_CALL_CONTROLS.md).
+
+See the authoritative [master plan](../../feather-scripts/gameplay-resource-docs/bcc-stables/BCC_STABLES_MASTER_PLAN.md),
+[owned horse reads](../../feather-scripts/gameplay-resource-docs/bcc-stables/OWNED_HORSE_READS.md),
+[stored fulfillment](../../feather-scripts/gameplay-resource-docs/bcc-stables/STORED_FULFILLMENT.md)
+and [outbox delivery](../../feather-scripts/gameplay-resource-docs/bcc-stables/OUTBOX_DELIVERY.md).
+
+See [horse selection](../../feather-scripts/gameplay-resource-docs/bcc-stables/HORSE_SELECTION.md) for revision-checked set/get/clear contracts and deployment gates.
+
+Durable call preparation/get/abort is implemented behind callPreparation=false;
+the single-use submission claim now feeds a gated native dispatch/bind/store bridge.
+See [native calls](../../feather-scripts/gameplay-resource-docs/bcc-stables/NATIVE_CALLS.md) for deployment and live gates. Internal binding/cleanup persistence is documented in
+[entity persistence](../../feather-scripts/gameplay-resource-docs/bcc-stables/CALL_ENTITY_PERSISTENCE.md). See
+[call preparation](../../feather-scripts/gameplay-resource-docs/bcc-stables/CALL_PREPARATION.md)
+for accepted migration/generation gates and remaining native lifecycle work.
 
 New RedM stables resource built from scratch for the current Feather Framework.
 The resource folder and export identity are `bcc-stables`.
@@ -8,12 +43,9 @@ The resource folder and export identity are `bcc-stables`.
 - `main` contains the current VORP version until the Feather Framework release.
 - `feather` contains the new Feather build, with no backward compatibility.
 
-This branch is an early development build, not a playable release. Core integration,
-owned checksummed schema migrations and an internal horse-purchase repository are
-implemented. Startup creates six Stables-owned tables. Purchases, money/item
-service calls, recovery workers and playable horse ownership remain disabled.
-Optional disposable native proofs are disabled by default. Core/native checks
-have recorded live evidence; persistence currently has offline coverage only.
+This branch is an early development build, not a playable release. Code migrations manage nine domain tables plus the migration ledger. Controlled
+purchase, financial, canonical, projection and outbox proofs retain durable audit
+records; live failure/race/session and physical gameplay gates remain open.
 
 ## Authoritative plan
 
@@ -30,14 +62,104 @@ Implementation status and acceptance evidence belong in the master plan.
 ## Integration direction
 
 Use Core session, RPC, event, policy, locale and notification APIs, plus Feather
-Economy, Inventory, MySQL, Routing, Toolkit and Menu v2 for their domain services.
-Stables owns horse identity, lifecycle and gameplay rules. Do not add VORP/RSG
+Assets, Economy, Inventory, MySQL, Routing, Toolkit and Menu v2 for their domain services.
+Assets owns canonical horse identity, model, provenance, status and ownership.
+Stables owns horse gameplay and coordinates purchase workflows. Do not add VORP/RSG
 bridges, old BCC API aliases or legacy database imports.
 
 ## Run the foundation
 
+Current checkpoint: server-only `config/catalog.lua`, validated against Economy
+currency precision, and bounded character-required `stables.catalog.get.v1` RPC.
+The frozen read-only catalogue starts with Morgan - Bay at 10000 dollars base
+units (100.00 at current precision=2), a configurable development default.
+Prices are display data, not purchase quotes. Quotes, purchases and spawning stay
+unavailable. Capability `catalogRead=1`; status `checks.catalog` reports revision
+and entry count, with two routes when entity proof is off. Offline suite: 257/257.
+
+Upload `fxmanifest.lua`, `config/catalog.lua`, `server/catalog.lua`,
+`server/economy.lua`, `server/foundation.lua` and `client/catalog.lua`. Keep every
+proof flag false. Server console: `refresh`, `restart bcc-stables`,
+`BccStablesStatus`, `BccStablesContractSmokeTest`. F8 while a character is selected:
+`BccStablesCatalogSmokeTest`. Expect revision=1, entries=1,
+purchasesAvailable=false and Morgan - Bay dollars 100.00. No money, assets or
+native entities are created. Details: gameplay-resource-docs/bcc-stables/CATALOG.md.
+
+Current checkpoint: opt-in paidLinkProof=false covers real one-base-unit payment,
+durable Assets registration/link, restart inspection and fully linked cancellation.
+Linked cleanup saves an immutable retirement plan before calling Assets; verifies
+the exact retirement receipt and terminal current state before any refund. Any
+prepared/submitted intent, owner/revision mismatch or fulfilled horse refuses this
+path. No physical horse or gameplay purchase path is enabled. Offline: 240/240.
+See gameplay-resource-docs/bcc-stables/PAID_LINK_PROOF.md for the eight upload files,
+flag settings, exact commands and remaining uncertain-registration constraints.
+
+Current checkpoint: durable compensation only for paid operations whose Assets
+registration was never prepared. FenceUnregistered checks for absent registration
+and fulfillment artifacts under the same locks as preparation, then saves a
+versioned fence. RefundUnregistered verifies the original journal and the full
+Economy reversal journal before terminal refund/capacity release. Any existing
+registration intent blocks this path; post-submission refunds remain unavailable.
+
+Optional paymentProof=false enables a console-only, one-base-unit real-payment
+test when explicitly set true. BccStablesPaymentProof run <serverPlayerId> 1
+charges the selected character's existing dollars wallet; inspect/refund take the
+printed character UUID. No Assets registration, entity or account provisioning.
+Exact instructions are in gameplay-resource-docs/bcc-stables/PAYMENT_PROOF.md.
+Offline suite: 220/220. Live payment/fence/refund recovery remains pending.
+
+Current checkpoint: required Economy Contract 1 consumer and internal payment
+receipt recovery. Startup checks trusted transaction reads; status includes
+checks.economy with paymentsEnabled=false. BccStablesEconomySmokeTest is read-only.
+The internal Payments.Pay method has no gameplay route or worker; only the opt-in
+payment proof invokes it. It saves intent before posting, replays the same transfer key,
+validates a committed two-entry journal and records paid without fulfilling a
+horse or refunding. See gameplay-resource-docs/bcc-stables/PAYMENT_RECOVERY.md.
+Current offline suite: 220/220. Live financial recovery remains pending.
+
+Upload fxmanifest.lua, server/economy.lua (new), server/payments.lua (new),
+server/foundation.lua and server/main.lua for this checkpoint. Keep all three
+proof flags false. Ensure feather-economy, run refresh before restart bcc-stables,
+then BccStablesStatus and BccStablesEconomySmokeTest. No new schema/framework edit.
+
+The opt-in `assetProof=false` setting controls a separate console-only canonical
+Assets proof. See gameplay-resource-docs/bcc-stables/ASSETS_CONTRACT_PROOF.md.
+It registers one deterministic test asset per character, checks replay/conflict
+and receipt recovery, then explicitly retires it. It spawns no entity, fabricates
+no payment and does not invoke the paid purchase coordinator. Retirement retains
+the canonical record and audit. Current offline suite: 179/179.
+
+This proof needs Admin's explicit bcc-stables / assets.asset.manage service grant
+under the feather-assets broker. That action covers asset management through
+Assets' own caller/manager checks; ownership transfer remains ungranted. Proof
+configuration stays false by default; registrationEnabled=false still describes
+the disabled gameplay registration path.
+
+Current Assets checkpoint: migration 002 adds durable registration intents and
+canonical asset links in `fs_asset_registrations`; migration 001 is unchanged.
+The internal coordinator persists intent before submission, recovers the same
+Assets request ID and checks receipt/current facts before recording a historical
+link. No command/RPC/startup worker invokes it; mutation policy and live recovery
+remain pending. Fulfillment/refunds remain blocked. Offline suite: 165/165.
+
+Startup validates Assets Contract 1, the enabled horse
+type and Stables' trusted read access. `BccStablesAssetsSmokeTest` is a read-only
+server-console check. `BccStablesStatus` includes `checks.assets` with
+`registrationEnabled=false`; no asset mutation is enabled. Assets loss latches
+foundation failure until Stables is restarted after its dependencies are ready.
+The authoritative `ASSETS_INTEGRATION.md` documents the remaining saga/fence design.
+
+For this checkpoint upload `fxmanifest.lua`, `server/migrations.lua`,
+`server/assets.lua`, `server/asset_registration.lua` (new) and
+`server/repository_proof.lua`. Keep both
+proof flags false. Run server-console `ensure feather-assets`, `refresh`, then
+`restart bcc-stables` before the diagnostics below. Status should report
+schemaVersion=2/applied=1 on the first upgrade (then applied=0 after restart).
+Run server-console `BccStablesPersistenceSmokeTest`: expect 9/9, including both
+migration checksums and fs_asset_registrations. The Assets smoke remains read-only.
+
 Start the current Feather Core and its own dependencies first. This build only
-requires `feather-core` and `feather-mysql`; other gameplay dependencies will be added with their
+requires `feather-core`, `feather-mysql`, `feather-assets` and `feather-economy`; other gameplay dependencies will be added with their
 corresponding implementations. Keep the folder name `bcc-stables`.
 
 Enabling the entity proof additionally requires `feather-toolkit` for bounded
@@ -241,8 +363,11 @@ Do not edit an applied migration; add a new migration for later schema changes.
 
 Internal Repository.Reserve/Get/Advance provide saved operation snapshots,
 character-row capacity serialization, immutable-term replay/conflict checks,
-revision CAS, atomic stored-horse/history/outbox fulfillment and compensation
-fencing. They expose no purchase export/RPC. Receipt content must originate from
+revision CAS and uncertain-operation retention. Preliminary local horse fulfillment
+has been removed: fulfilled/compensation_pending/refunded advances now return
+assets_settlement_unavailable until Assets-backed settlement exists. The pure rule
+model remains preliminary; its local horse/fence evidence is not production
+authorization. These functions expose no purchase export/RPC. Receipt content must originate from
 a trusted Economy service result, never a client-supplied receipt. The outbox is
 stored but not dispatched. No payment/recovery worker or paid gameplay is enabled.
 Database loss latches failure until dependency-order restart. Schema readiness is
@@ -290,3 +415,14 @@ one unpaid pending intent) survived explicit Stables restart. Exact cleanup
 removed three operations and subsequent inspect was empty. No funds/items/owned
 horses were created. Set repositoryProof=false and restart after cleanup. Full
 server restart and actual financial/fulfillment recovery remain pending.
+
+
+Controlled route-change testing now has console-only native route_test/route_return
+helpers through Feather Routing. Deployment/live acceptance pending; no schema or
+RPC change. Keep current test switches/selected Morgan across remaining tests,
+with an empty call slot between gates. See the native calls document.
+
+
+Console-only BccStablesNative drain now supports controlled pre-restart cleanup
+and blocks dispatch until restart, preserving selection/configuration. Live
+acceptance is pending; arbitrary restart/crash reconciliation remains separate.

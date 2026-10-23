@@ -60,8 +60,8 @@ function R.Get(operationId, characterId)
     return ok and result or P.DatabaseError(result)
 end
 
-function R.Reserve(input)
-    local candidate = O.New(input)
+function R.Reserve(input,quoteSnapshot)
+    local candidate = O.New(input,quoteSnapshot)
     if not candidate.ok then return candidate end
     local record, terms = candidate.value, candidate.value.terms
     return Transaction(function(tx)
@@ -98,6 +98,13 @@ function R.Advance(operationId, characterId, expectedRevision, target, evidence)
     operationId, characterId = Identity(operationId, characterId)
     if not operationId then return Stables.Err('invalid_input', 'Operation and character UUIDs required.') end
     evidence = type(evidence) == 'table' and Stables.Copy(evidence) or {}
+    -- A caller-supplied fence/horse ID cannot prove Assets registration was
+    -- committed or prevented. Generic transitions stay closed, including restored
+    -- preliminary compensation snapshots. Only FenceUnregistered's locked absence
+    -- check below can admit the narrow never-prepared compensation path.
+    if target == 'fulfilled' or target == 'compensation_pending' or target == 'refunded' then
+        return Stables.Err('assets_settlement_unavailable', 'Assets-backed settlement is not implemented.')
+    end
     -- Internal evidence must come from trusted Economy results / committed domain facts.
     return Transaction(function(tx)
         if not LockCharacter(tx, characterId) then return Stables.Err('operation_not_found', 'Purchase operation was not found.') end
@@ -106,23 +113,7 @@ function R.Advance(operationId, characterId, expectedRevision, target, evidence)
         local record = decoded.value
         local advanced = O.Advance(record, expectedRevision, target, evidence)
         if not advanced.ok then return advanced end
-        local nextRecord, terms = advanced.value, record.terms
-        if target == 'compensation_pending' or target == 'fulfilled' then
-            if tx.one('SELECT horse_id FROM fs_horses WHERE origin_operation_id=? FOR UPDATE', operationId) then
-                return Stables.Err('fulfillment_exists', 'A committed horse already exists for this operation.')
-            end
-        end
-        if target == 'fulfilled' then
-            local horse = tx.exec([[INSERT INTO fs_horses
-                (horse_id,owner_character_id,origin_operation_id,catalog_id,catalog_revision)
-                VALUES (?,?,?,?,?)]], terms.horseId, terms.characterId, operationId, terms.catalogId, terms.catalogRevision)
-            local facts = json.encode({ operationId = operationId, horseId = terms.horseId, ownerCharacterId = terms.characterId })
-            local history = tx.exec([[INSERT INTO fs_horse_history (event_id,horse_id,operation_id,event_kind,facts_json)
-                VALUES (?,?,?,'acquired',?)]], operationId, terms.horseId, operationId, facts)
-            local outbox = tx.exec([[INSERT INTO fs_outbox (event_id,operation_id,event_name,payload_json)
-                VALUES (?,?,'stables.horse.acquired.v1',?)]], 'stables.horse.acquired.v1:' .. operationId, operationId, facts)
-            if horse ~= 1 or history ~= 1 or outbox ~= 1 then return Stables.Err('fulfillment_not_saved', 'Horse fulfillment writes did not complete.') end
-        end
+        local nextRecord = advanced.value
         local encoded = json.encode(nextRecord)
         if #encoded > 16384 then return Stables.Err('invalid_operation', 'Operation snapshot exceeds its bound.') end
         local changed = tx.exec([[UPDATE fs_operations SET state=?,revision=?,payment_transaction_id=?,refund_transaction_id=?,record_json=?
@@ -133,4 +124,127 @@ function R.Advance(operationId, characterId, expectedRevision, target, evidence)
         if changed ~= 1 then return Stables.Err('revision_conflict', 'Concurrent operation update refused; transaction rolled back.') end
         return Stables.Ok(Stables.Copy(nextRecord))
     end)
+end
+
+-- Narrow exception to the generic settlement gate: registration was NEVER
+-- prepared. The same character -> operation lock order excludes Prepare racing
+-- this fence. Once compensation_pending commits, Prepare/Submitted require paid
+-- and cannot submit later. Any registration row, even prepared, blocks this path.
+local function Unregistered(operationId,characterId,expectedRevision,refundReceipt)
+    operationId,characterId=Identity(operationId,characterId)
+    if not operationId then return Stables.Err('invalid_input','Operation and character UUIDs required.') end
+    refundReceipt=type(refundReceipt)=='table' and Stables.Copy(refundReceipt) or refundReceipt
+    return Transaction(function(tx)
+        if not LockCharacter(tx,characterId) then return Stables.Err('operation_not_found','Purchase was not found.') end
+        local decoded=Decode(tx.one('SELECT * FROM fs_operations WHERE operation_id=? AND character_id=? FOR UPDATE',operationId,characterId))
+        if not decoded.ok then return decoded end
+        local record=decoded.value
+        if tx.one('SELECT * FROM fs_asset_registrations WHERE operation_id=? FOR UPDATE',operationId) then
+            return Stables.Err('registration_exists','Registration intent exists; this refund path is unavailable.')
+        end
+        if tx.one('SELECT horse_id FROM fs_horses WHERE origin_operation_id=? FOR UPDATE',operationId)
+            or tonumber(tx.value('SELECT COUNT(*) FROM fs_horse_history WHERE operation_id=?',operationId))~=0
+            or tonumber(tx.value('SELECT COUNT(*) FROM fs_outbox WHERE operation_id=?',operationId))~=0 then
+            return Stables.Err('fulfillment_exists','Horse fulfillment artifacts require reconciliation.')
+        end
+        if record.revision~=expectedRevision then return Stables.Err('revision_conflict','Purchase revision changed.') end
+        local target=refundReceipt and 'refunded' or 'compensation_pending'
+        if record.state==target and record.registrationFence=='unregistered_v1' then
+            if refundReceipt and record.refundReceipt.transactionId~=refundReceipt.transactionId then
+                return Stables.Err('invalid_receipt','Refund identity changed.')
+            end
+            return Stables.Ok(record)
+        end
+        if (refundReceipt and (record.state~='compensation_pending' or record.registrationFence~='unregistered_v1'))
+            or (not refundReceipt and record.state~='paid') then
+            return Stables.Err('registration_not_fenced','Only a paid, never-prepared registration can be fenced here.')
+        end
+        local advanced=O.Advance(record,record.revision,target,refundReceipt and {refundReceipt=refundReceipt} or {fulfillmentFenced=true})
+        if not advanced.ok then return advanced end
+        local nextRecord=advanced.value
+        nextRecord.registrationFence='unregistered_v1'
+        if not O.Validate(nextRecord).ok then return Stables.Err('invalid_operation','Invalid fenced operation.') end
+        local encoded=json.encode(nextRecord)
+        if #encoded>16384 then return Stables.Err('invalid_operation','Fenced operation exceeds its bound.') end
+        local changed=tx.exec([[UPDATE fs_operations SET state=?,revision=?,payment_transaction_id=?,refund_transaction_id=?,record_json=?
+            WHERE operation_id=? AND character_id=? AND revision=? AND state=?]],nextRecord.state,nextRecord.revision,
+            nextRecord.paymentReceipt.transactionId,nextRecord.refundReceipt and nextRecord.refundReceipt.transactionId or nil,
+            encoded,operationId,characterId,record.revision,record.state)
+        if changed~=1 then return Stables.Err('revision_conflict','Fenced purchase update did not commit.') end
+        return Stables.Ok(nextRecord)
+    end)
+end
+
+function R.FenceUnregistered(operationId,characterId,expectedRevision)
+    return Unregistered(operationId,characterId,expectedRevision)
+end
+
+-- Evidence must be obtained and journal-verified by Payments.RefundUnregistered,
+-- never accepted from a client or generic settlement transition.
+function R.SaveUnregisteredRefund(operationId,characterId,expectedRevision,receipt)
+    if type(receipt)~='table' then return Stables.Err('invalid_receipt','Verified reversal receipt required.') end
+    return Unregistered(operationId,characterId,expectedRevision,receipt)
+end
+
+local function Linked(operationId,characterId,expectedRevision,assetId,assetRevision,receipt)
+    operationId,characterId=Identity(operationId,characterId)
+    if not operationId then return Stables.Err('invalid_input','Operation and character UUIDs required.') end
+    receipt=Stables.Copy(receipt)
+    return Transaction(function(tx)
+        if not LockCharacter(tx,characterId) then return Stables.Err('operation_not_found','Purchase was not found.') end
+        local decoded=Decode(tx.one('SELECT * FROM fs_operations WHERE operation_id=? AND character_id=? FOR UPDATE',operationId,characterId))
+        if not decoded.ok then return decoded end
+        local record=decoded.value
+        local row=tx.one('SELECT * FROM fs_asset_registrations WHERE operation_id=? FOR UPDATE',operationId)
+        local link=Stables.AssetRegistration.ValidateSaved(row,record,row and row.model_key)
+        if not link.ok then return link end
+        if link.value.state~='linked' then return Stables.Err('registration_not_linked','Only a completed canonical link can be retired here.') end
+        if record.revision~=expectedRevision then return Stables.Err('revision_conflict','Purchase revision changed.') end
+        if tx.one('SELECT horse_id FROM fs_horses WHERE origin_operation_id=? FOR UPDATE',operationId)
+            or tonumber(tx.value('SELECT COUNT(*) FROM fs_horse_history WHERE operation_id=?',operationId))~=0
+            or tonumber(tx.value('SELECT COUNT(*) FROM fs_outbox WHERE operation_id=?',operationId))~=0 then
+            return Stables.Err('fulfillment_exists','Fulfilled horses require a separate cancellation protocol.')
+        end
+        local plan=record.assetRetirement
+        if receipt then
+            if record.registrationFence~='linked_retirement_v1' or not plan or plan.assetId~=link.value.assetId then
+                return Stables.Err('registration_not_fenced','A matching linked-retirement fence is required.')
+            end
+            if record.state=='refunded' then
+                if record.refundReceipt.transactionId~=receipt.transactionId then return Stables.Err('invalid_receipt','Refund identity changed.') end
+                return Stables.Ok(record)
+            end
+        elseif record.state=='compensation_pending' and record.registrationFence=='linked_retirement_v1' then
+            if plan.assetId~=assetId or plan.expectedRevision~=assetRevision then return Stables.Err('idempotency_conflict','Retirement plan changed.') end
+            return Stables.Ok(record)
+        elseif record.state~='paid' or assetId~=link.value.assetId or type(assetRevision)~='number'
+            or assetRevision<link.value.assetRevision then
+            return Stables.Err('registration_not_fenced','Current canonical asset revision and a paid purchase are required.')
+        end
+        local advanced=O.Advance(record,record.revision,receipt and 'refunded' or 'compensation_pending',
+            receipt and {refundReceipt=receipt} or {fulfillmentFenced=true})
+        if not advanced.ok then return advanced end
+        local nextRecord=advanced.value
+        if not receipt then
+            nextRecord.registrationFence='linked_retirement_v1'
+            nextRecord.assetRetirement={assetId=assetId,expectedRevision=assetRevision,requestId='stables.retire:'..operationId}
+        end
+        if not O.Validate(nextRecord).ok then return Stables.Err('invalid_operation','Invalid linked cancellation plan.') end
+        local encoded=json.encode(nextRecord)
+        if #encoded>16384 then return Stables.Err('invalid_operation','Cancellation snapshot exceeds its bound.') end
+        if tx.exec([[UPDATE fs_operations SET state=?,revision=?,payment_transaction_id=?,refund_transaction_id=?,record_json=?
+            WHERE operation_id=? AND character_id=? AND revision=? AND state=?]],nextRecord.state,nextRecord.revision,
+            nextRecord.paymentReceipt.transactionId,nextRecord.refundReceipt and nextRecord.refundReceipt.transactionId or nil,
+            encoded,operationId,characterId,record.revision,record.state)~=1 then
+            return Stables.Err('revision_conflict','Linked cancellation update did not commit.')
+        end
+        return Stables.Ok(nextRecord)
+    end)
+end
+function R.FenceLinked(operationId,characterId,revision,assetId,assetRevision)
+    return Linked(operationId,characterId,revision,assetId,assetRevision)
+end
+function R.SaveLinkedRefund(operationId,characterId,revision,receipt)
+    if type(receipt)~='table' then return Stables.Err('invalid_receipt','Verified reversal receipt required.') end
+    return Linked(operationId,characterId,revision,nil,nil,receipt)
 end

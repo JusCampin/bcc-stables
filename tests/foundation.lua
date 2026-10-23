@@ -10,6 +10,7 @@ end
 
 local function fixture(overrides)
     local env = setmetatable({}, { __index = _G })
+    env.RegisterCommand = function() end
     local mock = { state = 'started', time = 0, calls = {}, routes = {}, subscriptions = {}, nextToken = 0 }
     env.GetCurrentResourceName = function() return 'bcc-stables' end
     env.GetResourceMetadata = function() return '0.1.0-dev' end
@@ -34,6 +35,7 @@ local function fixture(overrides)
     methods.IsSessionCurrent = function(_, source, id, characterId)
         return mock.current and source == session.source and id == session.sessionId and characterId == session.characterId
     end
+    methods.DeclareEvent = function() return {ok=true,value={owner='bcc-stables'}} end
     methods.RegisterLocale = function(_, locale, translations)
         mock.locale, mock.translations = locale, translations
         return { ok = true, value = { locale = locale } }
@@ -61,15 +63,26 @@ local function fixture(overrides)
         end
     end })
     env.exports = { ['feather-core'] = provider }
-    for _, file in ipairs({ 'config.lua', 'shared/contracts.lua', 'server/core.lua', 'server/foundation.lua' }) do
+    for _, file in ipairs({ 'config.lua', 'config/catalog.lua', 'config/locations.lua', 'shared/contracts.lua', 'server/catalog.lua', 'server/locations.lua', 'server/quotes.lua', 'server/admissions.lua', 'server/admission_payments.lua', 'server/admission_registration.lua', 'server/fulfillment.lua', 'server/outbox.lua', 'server/owned_horses.lua', 'server/selection.lua', 'server/calls.lua', 'server/core.lua', 'server/foundation.lua' }) do
         assert(loadfile(file, 't', env))()
     end
     mock.env, mock.stables = env, env.Stables
+    env.Stables.Assets = {
+        Start = function() return env.Stables.Ok({ ok = true, contract = 1, trustedRead = true }) end,
+        RequireReady = function() return env.Stables.Ok(true) end,
+    }
+    env.Stables.Economy = {
+        Currency = function(code) return env.Stables.Ok({code=code,precision=2}) end,
+        Start = function() return env.Stables.Ok({ok=true,contract=1,trustedRead=true,paymentsEnabled=false}) end,
+        RequireReady = function() return env.Stables.Ok(true) end,
+    }
     env.Stables.Persistence = {
         Start = function() return env.Stables.Ok({ state = 'ready', schemaVersion = 1, applied = 0, resumed = 0 }) end,
         RequireReady = function() return env.Stables.Ok({ state = 'ready' }) end,
         Stop = function() end,
     }
+    env.Stables.NativeCalls={Start=function() return env.Stables.Ok({ok=true,enabled=false,entitySpawning=false}) end,
+        Install=function() return env.Stables.Ok({routes=5}) end,Run=function() end,Stop=function() end,SessionEvent=function() end}
     mock.start = function() return env.Stables.Foundation.Start() end
     return mock
 end
@@ -224,7 +237,79 @@ test('database health gate prevents otherwise valid session requests', function(
     assert(m.stables.Foundation.CheckSession(12,m.session).code == 'persistence_unavailable')
 end)
 
+test('Assets startup refusal prevents persistence and route registration', function()
+    local m = fixture()
+    m.stables.Assets.Start = function() return m.stables.Err('forbidden', 'Not a trusted reader.') end
+    m.stables.Persistence.Start = function() error('must not migrate') end
+    assert(m.start().code == 'forbidden' and next(m.routes) == nil)
+end)
+
+test('Assets stop latches failure even after provider returns', function()
+    local m = fixture(); assert(m.start().ok)
+    m.stables.Foundation.AssetsStopped()
+    assert(m.stables.Foundation.Health().value.reason == 'assets_unavailable')
+    assert(next(m.subscriptions) == nil and not m.stables.Foundation.RequireReady().ok)
+end)
+
+test('Assets health refusal blocks session requests and remains latched', function()
+    local m = fixture(); assert(m.start().ok)
+    m.stables.Assets.RequireReady = function() return m.stables.Err('assets_unavailable', 'Failed.') end
+    assert(m.stables.Foundation.CheckSession(12,m.session).code == 'assets_unavailable')
+    m.stables.Assets.RequireReady = function() return m.stables.Ok(true) end
+    assert(m.stables.Foundation.CheckSession(12,m.session).code == 'not_ready')
+end)
+
+test('Economy startup refusal prevents persistence and routes',function()
+    local m=fixture()
+    m.stables.Economy.Start=function() return m.stables.Err('authorization_denied','Untrusted reader.') end
+    m.stables.Persistence.Start=function() error('must not migrate') end
+    assert(m.start().code=='authorization_denied' and next(m.routes)==nil)
+end)
+test('Economy resource stop latches failure and releases subscriptions',function()
+    local m=fixture(); assert(m.start().ok); m.stables.Foundation.EconomyStopped()
+    assert(m.stables.Foundation.Health().value.reason=='economy_unavailable' and next(m.subscriptions)==nil)
+    assert(m.stables.Foundation.RequireReady().code=='not_ready')
+end)
+test('Economy health failure blocks sessions and does not silently recover',function()
+    local m=fixture(); assert(m.start().ok)
+    m.stables.Economy.RequireReady=function() return m.stables.Err('economy_unavailable','Failed.') end
+    assert(m.stables.Foundation.CheckSession(12,m.session).code=='economy_unavailable')
+    m.stables.Economy.RequireReady=function() return m.stables.Ok(true) end
+    assert(m.stables.Foundation.RequireReady().code=='not_ready')
+end)
+test('catalogue startup adds only a bounded read route and capability',function()
+    local m=fixture(); assert(m.start().ok)
+    local health=m.stables.Foundation.Health().value
+    assert(health.checks.catalog.entries==1 and health.checks.registrations.routes==27)
+    assert(m.routes['stables.catalog.get.v1'].options.requireCharacter)
+    assert(m.stables.Foundation.Capabilities().value.features.catalogRead==1)
+end)
+test('invalid catalogue refuses startup before database migrations and routes',function()
+    local m=fixture(); m.env.StablesCatalogConfig.entries[1].amount=-1
+    m.stables.Persistence.Start=function() error('must not migrate') end
+    assert(m.start().code=='catalog_config_error' and next(m.routes)==nil)
+end)
+test('catalogue currency failure refuses startup',function()
+    local m=fixture(); m.stables.Economy.Currency=function() return m.stables.Err('currency_not_found','Missing.') end
+    assert(m.start().code=='currency_not_found' and next(m.routes)==nil)
+end)
 for _, file in ipairs({ 'fxmanifest.lua', 'server/main.lua', 'client/diagnostics.lua' }) do
     assert(loadfile(file, 't', {}))
 end
+
+
+test('native startup failure refuses foundation before publication or dispatch',function()
+    local m=fixture()
+    m.stables.NativeCalls.Start=function() return m.stables.Err('config_error','Invalid native switch.') end
+    assert(m.start().code=='config_error' and m.stables.Foundation.Health().value.state=='failed')
+end)
+
+test('foundation stop and provider failure stop live native observer',function()
+    local m=fixture(); local stops=0
+    m.stables.NativeCalls.Stop=function() stops=stops+1 end
+    assert(m.start().ok); m.stables.Foundation.Stop(); assert(stops==1)
+    m=fixture(); stops=0; m.stables.NativeCalls.Stop=function() stops=stops+1 end
+    assert(m.start().ok); m.stables.Foundation.AssetsStopped(); assert(stops==1)
+end)
+
 print(('%d/%d offline cases passed; runtime entry points parse under Lua 5.4.'):format(passed, passed))

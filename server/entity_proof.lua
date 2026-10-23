@@ -47,16 +47,29 @@ local function ObserveOwner(record)
     if #record.ownerHistory >= 16 then table.remove(record.ownerHistory, 1) end
     local sample = { networkOwner = owner, ageSeconds = math.floor((GetGameTimer() - record.started) / 1000) }
     record.ownerHistory[#record.ownerHistory + 1] = sample
-    Log(Stables.Ok({ event = 'network_owner', generation = record.generation, source = record.session.source,
-        networkOwner = owner, ageSeconds = sample.ageSeconds }))
+    Log(Stables.Ok({
+        event = 'network_owner',
+        generation = record.generation,
+        source = record.session.source,
+        networkOwner = owner,
+        ageSeconds = sample.ageSeconds
+    }))
 end
 
 local function Forget(record, outcome)
-    lastCleanup = { generation = record.generation, source = record.session.source, netId = record.netId,
-        mode = record.mode, reason = record.reason, outcome = outcome or 'cleared',
+    lastCleanup = {
+        generation = record.generation,
+        source = record.session.source,
+        netId = record.netId,
+        mode = record.mode,
+        reason = record.reason,
+        outcome = outcome or 'cleared',
         ageSeconds = math.floor((GetGameTimer() - record.started) / 1000),
-        lifetimeSeconds = record.lifetimeMs / 1000, lastNetworkOwner = record.lastNetworkOwner,
-        ownerChanges = record.ownerChanges or 0, ownerHistory = Stables.Copy(record.ownerHistory or {}) }
+        lifetimeSeconds = record.lifetimeMs / 1000,
+        lastNetworkOwner = record.lastNetworkOwner,
+        ownerChanges = record.ownerChanges or 0,
+        ownerHistory = Stables.Copy(record.ownerHistory or {})
+    }
     Log(Stables.Ok({ event = 'cleanup_finished', cleanup = Stables.Copy(lastCleanup) }))
     if lease == record then lease = nil end
 end
@@ -109,7 +122,10 @@ function P.Clear(reason)
 end
 
 function P.Begin(target, lifetimeSeconds)
-    if not installed or not StablesConfig.entityProof.enabled then return Stables.Err('disabled', 'Entity proof is disabled.') end
+    if not installed or not StablesConfig.entityProof.enabled then
+        return Stables.Err('disabled',
+            'Entity proof is disabled.')
+    end
     local ready = Stables.Foundation.RequireReady()
     if not ready.ok then return ready end
     if lease then return Stables.Err('busy', 'Clear the existing proof before spawning another.') end
@@ -128,12 +144,23 @@ function P.Begin(target, lifetimeSeconds)
         return Stables.Err('foreign_route', 'Proof requires the default world; no route will be changed.')
     end
     serial = serial + 1
-    lease = { generation = ('proof:%d:%d:%d'):format(os.time(), GetGameTimer(), serial),
-        session = session.value, state = 'preparing', started = GetGameTimer(), mode = StablesConfig.entityProof.spawnMode,
-        lifetimeMs = lifetimeSeconds * 1000 }
+    lease = {
+        generation = ('proof:%d:%d:%d'):format(os.time(), GetGameTimer(), serial),
+        session = session.value,
+        state = 'preparing',
+        started = GetGameTimer(),
+        mode = StablesConfig.entityProof.spawnMode,
+        lifetimeMs = lifetimeSeconds * 1000
+    }
     TriggerClientEvent('bcc-stables:proof:prepare', target, { generation = lease.generation, model = MODEL })
-    return Stables.Ok({ state = lease.state, generation = lease.generation, source = target, model = MODEL,
-        mode = lease.mode, lifetimeSeconds = lifetimeSeconds })
+    return Stables.Ok({
+        state = lease.state,
+        generation = lease.generation,
+        source = target,
+        model = MODEL,
+        mode = lease.mode,
+        lifetimeSeconds = lifetimeSeconds
+    })
 end
 
 local function ValidateRequest(source, context, generation)
@@ -152,18 +179,28 @@ function P.Prepared(payload, source, context)
     local record, failure = ValidateRequest(source, context, payload.generation)
     if not record then return failure end
     if record.state ~= 'preparing' then return Stables.Err('conflict', 'Proof spawn has already started.') end
-    if GetGameTimer() - record.started > 15000 then P.Clear('prepare_timeout'); return Stables.Err('timeout', 'Preparation expired.') end
-    if GetPlayerRoutingBucket(source) ~= 0 then P.Clear('route_changed'); return Stables.Err('foreign_route', 'Player changed route.') end
+    if GetGameTimer() - record.started > 15000 then
+        P.Clear('prepare_timeout'); return Stables.Err('timeout', 'Preparation expired.')
+    end
+    if GetPlayerRoutingBucket(source) ~= 0 then
+        P.Clear('route_changed'); return Stables.Err('foreign_route', 'Player changed route.')
+    end
     local ped = GetPlayerPed(source)
-    if not Exists(ped) then P.Clear('ped_missing'); return Stables.Err('player_unavailable', 'Player ped is unavailable.') end
+    if not Exists(ped) then
+        P.Clear('ped_missing'); return Stables.Err('player_unavailable', 'Player ped is unavailable.')
+    end
     local pos, heading = GetEntityCoords(ped), GetEntityHeading(ped)
     if record.mode == 'client_lease' then
         record.position = { x = pos.x + 3.0, y = pos.y + 0.0, z = pos.z + 0.0, heading = heading + 0.0 }
         record.state, record.candidates, record.candidateCount = 'client_spawning', {}, 0
         record.candidateOwners = {}
         record.bindStarted = GetGameTimer()
-        return Stables.Ok({ generation = record.generation, mode = record.mode,
-            model = MODEL, position = Stables.Copy(record.position) })
+        return Stables.Ok({
+            generation = record.generation,
+            mode = record.mode,
+            model = MODEL,
+            position = Stables.Copy(record.position)
+        })
     end
     -- RDR3 signature, not FiveM's pedType-first signature. Server RPC creation
     -- remains an experiment until observed on the target RedM artifact.
@@ -217,15 +254,20 @@ end
 local function BindingFailure(record, netId, entity, code, message)
     local exists = Exists(entity)
     local observation = {
-        diagnostic = 4, generation = record.generation, netId = netId,
-        entityExists = exists, creationObserved = record.candidates[entity] == true,
-        candidateCount = record.candidateCount, sessionCurrent = Current(record),
+        diagnostic = 4,
+        generation = record.generation,
+        netId = netId,
+        entityExists = exists,
+        creationObserved = record.candidates[entity] == true,
+        candidateCount = record.candidateCount,
+        sessionCurrent = Current(record),
     }
     if exists then
         local script = GetEntityScript(entity)
         local marker = Entity(entity).state[MARKER]
         local position = GetEntityCoords(entity)
-        local dx, dy, dz = position.x - record.position.x, position.y - record.position.y, position.z - record.position.z
+        local dx, dy, dz = position.x - record.position.x, position.y - record.position.y, position.z - record.position
+            .z
         observation.script = script or '<none>'
         observation.scriptMatches = script == GetCurrentResourceName()
         observation.scriptAvailable = type(script) == 'string' and script ~= ''
@@ -251,14 +293,18 @@ function P.Bind(payload, source, context)
         return Stables.Err('conflict', 'No client spawn is awaiting binding.')
     end
     if record.binding then return Stables.Err('conflict', 'Lease binding is already in progress.') end
-    if GetGameTimer() - record.bindStarted > 15000 then P.Clear('bind_timeout'); return Stables.Err('timeout', 'Spawn binding expired.') end
+    if GetGameTimer() - record.bindStarted > 15000 then
+        P.Clear('bind_timeout'); return Stables.Err('timeout', 'Spawn binding expired.')
+    end
     record.binding = true
     local started, entity = GetGameTimer(), 0
     repeat
         entity = NetworkGetEntityFromNetworkId(payload.netId)
         if Exists(entity) and record.candidates[entity]
             and ScriptAllowed(entity)
-            and Entity(entity).state[MARKER] == record.generation then break end
+            and Entity(entity).state[MARKER] == record.generation then
+            break
+        end
         if not Current(record) or GetGameTimer() - started >= 5000 then
             record.binding = false
             return BindingFailure(record, payload.netId, entity, 'entity_not_observed',
@@ -287,39 +333,69 @@ end
 function P.Report(payload, source, context)
     local record, failure = ValidateRequest(source, context, payload.generation)
     if not record then return failure end
-    record.client = { found = payload.found, controlled = payload.controlled, initialized = payload.initialized,
-        collisionLoaded = payload.collisionLoaded, settled = payload.settled }
+    record.client = {
+        found = payload.found,
+        controlled = payload.controlled,
+        initialized = payload.initialized,
+        collisionLoaded = payload.collisionLoaded,
+        settled = payload.settled
+    }
     return Stables.Ok({ recorded = true }) -- Client observations are not authority.
 end
 
 function P.Inspect()
-    if not lease then return Stables.Ok({ state = 'empty', enabled = installed,
-        lastFailure = Stables.Copy(lastFailure), lastCleanup = Stables.Copy(lastCleanup) }) end
+    if not lease then
+        return Stables.Ok({
+            state = 'empty',
+            enabled = installed,
+            lastFailure = Stables.Copy(lastFailure),
+            lastCleanup = Stables.Copy(lastCleanup)
+        })
+    end
     local record = lease
     local exists = SameEntity(record)
     local script = exists and GetEntityScript(record.entity) or nil
-    return Stables.Ok({ state = record.state, generation = record.generation, source = record.session.source,
-        model = MODEL, mode = record.mode, netId = record.netId, exists = exists, reason = record.reason,
-        ageSeconds = math.floor((GetGameTimer() - record.started) / 1000), lifetimeSeconds = record.lifetimeMs / 1000,
+    return Stables.Ok({
+        state = record.state,
+        generation = record.generation,
+        source = record.session.source,
+        model = MODEL,
+        mode = record.mode,
+        netId = record.netId,
+        exists = exists,
+        reason = record.reason,
+        ageSeconds = math.floor((GetGameTimer() - record.started) / 1000),
+        lifetimeSeconds = record.lifetimeMs / 1000,
         remainingSeconds = math.max(0, math.ceil((record.lifetimeMs - GetGameTimer() + record.started) / 1000)),
-        ownerChanges = record.ownerChanges or 0, ownerHistory = Stables.Copy(record.ownerHistory or {}),
+        ownerChanges = record.ownerChanges or 0,
+        ownerHistory = Stables.Copy(record.ownerHistory or {}),
         sessionCurrent = Stables.Core.IsSessionCurrent(record.session),
         networkOwner = exists and NetworkGetEntityOwner(record.entity) or nil,
         entityBucket = exists and GetEntityRoutingBucket(record.entity) or nil,
         script = exists and (script or '<none>') or nil,
         scriptMetadataAvailable = type(script) == 'string' and script ~= '',
-        client = Stables.Copy(record.client), bindObservation = Stables.Copy(record.bindObservation) })
+        client = Stables.Copy(record.client),
+        bindObservation = Stables.Copy(record.bindObservation)
+    })
 end
 
 function P.Tick()
     if not lease then return end
-    if lease.cancelled then P.Clear(lease.reason)
-    elseif not Current(lease) then P.Clear('session_left')
-    elseif GetPlayerRoutingBucket(lease.session.source) ~= 0 then P.Clear('route_changed')
-    elseif lease.state == 'client_spawning' and GetGameTimer() - lease.bindStarted > 15000 then P.Clear('bind_timeout')
-    elseif GetGameTimer() - lease.started > (lease.state == 'preparing' and 15000 or lease.lifetimeMs) then P.Clear('expired')
-    elseif lease.state == 'active' and not SameEntity(lease) then P.Clear('entity_missing')
-    elseif lease.state == 'active' then ObserveOwner(lease) end
+    if lease.cancelled then
+        P.Clear(lease.reason)
+    elseif not Current(lease) then
+        P.Clear('session_left')
+    elseif GetPlayerRoutingBucket(lease.session.source) ~= 0 then
+        P.Clear('route_changed')
+    elseif lease.state == 'client_spawning' and GetGameTimer() - lease.bindStarted > 15000 then
+        P.Clear('bind_timeout')
+    elseif GetGameTimer() - lease.started > (lease.state == 'preparing' and 15000 or lease.lifetimeMs) then
+        P.Clear('expired')
+    elseif lease.state == 'active' and not SameEntity(lease) then
+        P.Clear('entity_missing')
+    elseif lease.state == 'active' then
+        ObserveOwner(lease)
+    end
 end
 
 local function RoutingCall(method, ...)
@@ -345,7 +421,10 @@ function P.RouteTest()
         return Stables.Err('active_proof_required', 'Spawn and inspect an active current fixture first.')
     end
     local target = record.session.source
-    if GetPlayerRoutingBucket(target) ~= 0 then return Stables.Err('foreign_route', 'Player must be in the default world.') end
+    if GetPlayerRoutingBucket(target) ~= 0 then
+        return Stables.Err('foreign_route',
+            'Player must be in the default world.')
+    end
     local caps = RoutingCall('GetCapabilities')
     if not caps.ok then return caps end
     local value = caps.value
@@ -358,7 +437,8 @@ function P.RouteTest()
     if not current.ok then return current end
     if current.value ~= nil then return Stables.Err('foreign_route', 'Player already has managed route membership.') end
     routeTestRunning = true
-    local created = RoutingCall('CreateRoute', { key = record.generation .. ':route', mode = 'strict', populationEnabled = false })
+    local created = RoutingCall('CreateRoute',
+        { key = record.generation .. ':route', mode = 'strict', populationEnabled = false })
     local routeId = created.ok and type(created.value) == 'table' and created.value.routeId
     if type(routeId) ~= 'string' or routeId == '' then
         routeTestRunning = false
@@ -370,15 +450,22 @@ function P.RouteTest()
         if not joined.ok then return joined end
         local nativeJoined = GetPlayerRoutingBucket(target) ~= 0
         Wait(3000) -- Allow the normal one-second lifecycle monitor to observe exit.
-        return Stables.Ok({ generation = record.generation, source = target, nativeJoined = nativeJoined,
+        return Stables.Ok({
+            generation = record.generation,
+            source = target,
+            nativeJoined = nativeJoined,
             fixtureCleared = lease ~= record and lastCleanup ~= nil
                 and lastCleanup.generation == record.generation and lastCleanup.reason == 'route_changed'
-                and lastCleanup.outcome == 'cleared' })
+                and lastCleanup.outcome == 'cleared'
+        })
     end)
     -- Always attempt restore, including failed joins or a native exception.
     local deleted = RoutingCall('DeleteRoute', routeId)
     routeTestRunning = false
-    if not deleted.ok then return Stables.Err('route_cleanup_failed', 'Route deletion failed; retry route_return.', { routeId = routeId, cause = deleted.code }) end
+    if not deleted.ok then
+        return Stables.Err('route_cleanup_failed', 'Route deletion failed; retry route_return.',
+            { routeId = routeId, cause = deleted.code })
+    end
     if not ok then return Stables.Err('native_error', 'Route proof failed; owned route was deleted.') end
     if result.ok then
         result.value.returnedToDefault = GetPlayerRoutingBucket(target) == 0
@@ -389,7 +476,9 @@ end
 
 function P.SessionEvent(stage, session)
     if lease and (stage == 'leaving' or stage == 'left') and type(session) == 'table'
-        and session.sessionId == lease.session.sessionId then P.Clear('session_' .. stage) end
+        and session.sessionId == lease.session.sessionId then
+        P.Clear('session_' .. stage)
+    end
 end
 
 function P.Stop(reason)
@@ -409,9 +498,14 @@ local function Payload(payload, kind)
     for key in pairs(payload) do
         if key ~= 'generation' and not (kind == 'bind' and key == 'netId')
             and not (kind == 'report' and (key == 'found' or key == 'controlled' or key == 'initialized'
-                or key == 'collisionLoaded' or key == 'settled')) then return false end
+                or key == 'collisionLoaded' or key == 'settled')) then
+            return false
+        end
     end
-    if kind == 'bind' then return type(payload.netId) == 'number' and payload.netId % 1 == 0 and payload.netId > 0 and payload.netId <= 65535 end
+    if kind == 'bind' then
+        return type(payload.netId) == 'number' and payload.netId % 1 == 0 and payload.netId > 0 and
+            payload.netId <= 65535
+    end
     return kind ~= 'report' or (type(payload.found) == 'boolean' and type(payload.controlled) == 'boolean'
         and type(payload.initialized) == 'boolean' and type(payload.collisionLoaded) == 'boolean' and type(payload.settled) == 'boolean')
 end
@@ -421,10 +515,16 @@ function P.Install()
         return Stables.Err('dependency_unavailable', 'Entity proof requires feather-toolkit for bounded model loading.')
     end
     for _, spec in ipairs({ { 'stables.proof.prepared.v1', P.Prepared, 'prepared' },
-        { 'stables.proof.report.v1', P.Report, 'report' }, { 'stables.proof.bind.v1', P.Bind, 'bind' } }) do
+        { 'stables.proof.report.v1',   P.Report,   'report' }, { 'stables.proof.bind.v1', P.Bind, 'bind' } }) do
         local result = Stables.Core.Call('RegisterRpc', spec[1], spec[2], {
-            contract = 1, direction = 'client_to_server', requireCharacter = true,
-            windowMs = 2000, maxCalls = 2, maxPayloadBytes = 256, maxDepth = 2, maxNodes = 12,
+            contract = 1,
+            direction = 'client_to_server',
+            requireCharacter = true,
+            windowMs = 2000,
+            maxCalls = 2,
+            maxPayloadBytes = 256,
+            maxDepth = 2,
+            maxNodes = 12,
             validatePayload = function(payload) return Payload(payload, spec[3]), 'Invalid proof payload.' end,
         })
         if not result.ok then return result end
@@ -435,7 +535,10 @@ function P.Install()
         CreateThread(function()
             local ok, result = pcall(function()
                 if args[1] == 'spawn' then
-                    if args[3] and not tonumber(args[3]) then return Stables.Err('invalid_input', 'Lifetime must be a number of seconds.') end
+                    if args[3] and not tonumber(args[3]) then
+                        return Stables.Err('invalid_input',
+                            'Lifetime must be a number of seconds.')
+                    end
                     return P.Begin(tonumber(args[2]), tonumber(args[3]))
                 end
                 if args[1] == 'clear' then return P.Clear('console_clear') end
@@ -443,10 +546,14 @@ function P.Install()
                 if args[1] == 'route_test' then return P.RouteTest() end
                 if args[1] == 'route_return' then
                     if routeTestRunning then return Stables.Err('busy', 'Wait for the route proof to finish.') end
-                    if type(args[2]) ~= 'string' or #args[2] > 256 then return Stables.Err('invalid_input', 'Use route_return <routeId> from the route cleanup failure.') end
+                    if type(args[2]) ~= 'string' or #args[2] > 256 then
+                        return Stables.Err('invalid_input',
+                            'Use route_return <routeId> from the route cleanup failure.')
+                    end
                     return RoutingCall('DeleteRoute', args[2])
                 end
-                return Stables.Err('invalid_input', 'BccStablesProof spawn <source> [lifetimeSeconds] | inspect | clear | route_test | route_return <routeId>')
+                return Stables.Err('invalid_input',
+                    'BccStablesProof spawn <source> [lifetimeSeconds] | inspect | clear | route_test | route_return <routeId>')
             end)
             Log(ok and result or Stables.Err('native_error', 'Proof native operation failed; inspect before continuing.'))
         end)

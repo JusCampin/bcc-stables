@@ -7,7 +7,8 @@ local function Rpc(name, payload)
     local response, done = nil, false
     exports['feather-core']:CallRPC(name, payload, function(result, failure)
         if done then return end
-        response, done = result or { ok = false, code = type(failure) == 'table' and failure.code or 'transport_error' }, true
+        response, done = result or { ok = false, code = type(failure) == 'table' and failure.code or 'transport_error' },
+            true
     end, nil, 15000)
     local started = GetGameTimer()
     while not done and GetGameTimer() - started < 16000 do Wait(25) end
@@ -66,7 +67,9 @@ local function Initialize(record)
                 SetEntityVisible(horse, true)
                 return true, true, true
             end
-        else stableSince = nil end
+        else
+            stableSince = nil
+        end
         Wait(50)
     end
     -- Do not re-freeze/reveal an unsettled horse as a successful fixture.
@@ -76,11 +79,13 @@ end
 local function Release(record)
     record.cancelled = true
     if record.netId then retired = { generation = record.generation, netId = record.netId } end
-    if record.hash then SetModelAsNoLongerNeeded(record.hash); record.hash = nil end
+    if record.hash then
+        SetModelAsNoLongerNeeded(record.hash); record.hash = nil
+    end
     -- Server owns deletion. On client stop, delete only our recorded fixture if
     -- its network identity still matches and this client currently controls it.
     if Exists(record.entity) and (NetworkGetNetworkIdFromEntity(record.entity) == record.netId
-        or record.createdLocally and record.netId == nil)
+            or record.createdLocally and record.netId == nil)
         and Entity(record.entity).state.bccStablesProof == record.generation
         and Yes(NetworkHasControlOfEntity(record.entity)) then
         DeleteEntity(record.entity)
@@ -95,7 +100,9 @@ end)
 
 RegisterNetEvent('bcc-stables:proof:prepare', function(spec)
     if source ~= 65535 or type(spec) ~= 'table' or type(spec.generation) ~= 'string'
-        or spec.model ~= 'a_c_horse_morgan_bay' then return end
+        or spec.model ~= 'a_c_horse_morgan_bay' then
+        return
+    end
     if active then
         print('[bcc-stables:proof] client busy; clear the previous fixture before retrying.')
         return
@@ -112,9 +119,12 @@ RegisterNetEvent('bcc-stables:proof:prepare', function(spec)
                 error('Toolkit model contract unavailable')
             end
             local loaded = exports['feather-toolkit']:LoadModel(spec.model, 5000)
-            if type(loaded) ~= 'table' or not loaded.ok or type(loaded.value) ~= 'table' then error('Horse model failed to load') end
+            if type(loaded) ~= 'table' or not loaded.ok or type(loaded.value) ~= 'table' then error(
+                'Horse model failed to load') end
             record.hash = loaded.value.hash
-            if record.cancelled then SetModelAsNoLongerNeeded(record.hash); record.hash = nil; return end
+            if record.cancelled then
+                SetModelAsNoLongerNeeded(record.hash); record.hash = nil; return
+            end
             local result = Rpc('stables.proof.prepared.v1', { generation = record.generation })
             if type(result) ~= 'table' or not result.ok then
                 error('Server spawn rejected: ' .. tostring(type(result) == 'table' and result.code or 'invalid_result'))
@@ -130,12 +140,15 @@ RegisterNetEvent('bcc-stables:proof:prepare', function(spec)
                 FreezeEntityPosition(record.entity, true)
                 SetEntityAsMissionEntity(record.entity, true, true)
                 Entity(record.entity).state:set('bccStablesProof', record.generation, true)
-                if not Yes(NetworkGetEntityIsNetworked(record.entity)) then NetworkRegisterEntityAsNetworked(record.entity) end
+                if not Yes(NetworkGetEntityIsNetworked(record.entity)) then NetworkRegisterEntityAsNetworked(record
+                    .entity) end
                 local started = GetGameTimer()
                 repeat
                     if record.cancelled then return end
                     local id = NetworkGetNetworkIdFromEntity(record.entity)
-                    if id and id > 0 then record.netId = id; break end
+                    if id and id > 0 then
+                        record.netId = id; break
+                    end
                     if GetGameTimer() - started >= 5000 then error('Client horse did not obtain a network ID') end
                     Wait(25)
                 until false
@@ -161,7 +174,9 @@ RegisterNetEvent('bcc-stables:proof:prepare', function(spec)
             local started = GetGameTimer()
             while not record.cancelled and GetGameTimer() - started < 8000 do
                 local entity = NetworkGetEntityFromNetworkId(record.netId)
-                if Exists(entity) then record.entity = entity; break end
+                if Exists(entity) then
+                    record.entity = entity; break
+                end
                 Wait(25)
             end
             if record.cancelled then return end
@@ -172,14 +187,22 @@ RegisterNetEvent('bcc-stables:proof:prepare', function(spec)
                 initialized, collisionLoaded, settled = Initialize(record)
             end
             if record.cancelled then return end
-            local report = Rpc('stables.proof.report.v1', { generation = record.generation,
-                found = found == true, controlled = controlled == true, initialized = initialized,
-                collisionLoaded = collisionLoaded, settled = settled })
+            local report = Rpc('stables.proof.report.v1', {
+                generation = record.generation,
+                found = found == true,
+                controlled = controlled == true,
+                initialized = initialized,
+                collisionLoaded = collisionLoaded,
+                settled = settled
+            })
             print(('[bcc-stables:proof] client found=%s controlled=%s initialized=%s collisionLoaded=%s settled=%s report=%s netId=%s')
-                :format(tostring(found), tostring(controlled), tostring(initialized), tostring(collisionLoaded), tostring(settled),
+                :format(tostring(found), tostring(controlled), tostring(initialized), tostring(collisionLoaded),
+                    tostring(settled),
                     tostring(type(report) == 'table' and report.ok == true), tostring(record.netId)))
             record.reported = type(report) == 'table' and report.ok == true
-            if record.hash then SetModelAsNoLongerNeeded(record.hash); record.hash = nil end
+            if record.hash then
+                SetModelAsNoLongerNeeded(record.hash); record.hash = nil
+            end
         end)
         if not ok then
             print('[bcc-stables:proof] ' .. tostring(failure) .. '; inspect/clear from the server console.')
@@ -208,7 +231,8 @@ RegisterCommand('BccStablesProofReplay', function(_, args)
     local mode = args and args[1]
     local record = mode == 'duplicate' and active or mode == 'stale' and retired or nil
     if not record or not record.netId or mode == 'duplicate' and not record.reported then
-        print('[bcc-stables:proof] replay requires duplicate (active reported fixture) or stale (previously cleared fixture).')
+        print(
+        '[bcc-stables:proof] replay requires duplicate (active reported fixture) or stale (previously cleared fixture).')
         return
     end
     local generation, netId = record.generation, record.netId
@@ -218,7 +242,7 @@ RegisterCommand('BccStablesProofReplay', function(_, args)
         local ok, failure = pcall(function()
             Wait(2100) -- Keep the diagnostic beyond the normal spawn rate window.
             for _, spec in ipairs({ { 'prepared', { generation = generation } },
-                { 'bind', { generation = generation, netId = netId } } }) do
+                { 'bind',     { generation = generation, netId = netId } } }) do
                 local result = Rpc('stables.proof.' .. spec[1] .. '.v1', spec[2])
                 local code = type(result) == 'table' and result.code or 'invalid_result'
                 local passed = type(result) == 'table' and result.ok == false and code == expected

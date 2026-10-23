@@ -19,7 +19,8 @@ RegisterCommand('BccStablesClientSmokeTest', function()
         local ok, failure = pcall(function()
             local ready = exports['feather-core']:AwaitReady(5000)
             if type(ready) ~= 'table' or ready.ok ~= true then
-                print('[bcc-stables] Core client readiness failed: ' .. tostring(type(ready) == 'table' and ready.code or 'invalid_result'))
+                print('[bcc-stables] Core client readiness failed: ' ..
+                tostring(type(ready) == 'table' and ready.code or 'invalid_result'))
                 return
             end
             -- The callback path preserves Core's nil,error rejection. Capture
@@ -82,8 +83,11 @@ RegisterCommand('BccStablesRpcCompare', function()
             -- Space both requests beyond the route's two-second rate window.
             Wait(2100)
             local callbackResult = CallSessionCallback()
-            if callbackResult then DescribeResponse('callback', callbackResult)
-            else print('[bcc-stables] compare callback: no callback within 6000ms') end
+            if callbackResult then
+                DescribeResponse('callback', callbackResult)
+            else
+                print('[bcc-stables] compare callback: no callback within 6000ms')
+            end
             Wait(2100)
             local asyncResult = table.pack(exports['feather-core']:CallRPCAsync(
                 'stables.session.check.v1', {}, nil, 5000))

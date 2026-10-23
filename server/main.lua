@@ -5,9 +5,14 @@ exports('GetHealth', F.Health)
 exports('AwaitReady', F.AwaitReady)
 
 AddEventHandler('onResourceStop', function(resource)
-    if resource == GetCurrentResourceName() then F.Stop()
-    elseif resource == 'feather-core' then F.CoreStopped() end
+    if resource == GetCurrentResourceName() then
+        F.Stop()
+    elseif resource == 'feather-core' then
+        F.CoreStopped()
+    end
     if resource == 'feather-mysql' then F.DatabaseStopped() end
+    if resource == 'feather-assets' then F.AssetsStopped() end
+    if resource == 'feather-economy' then F.EconomyStopped() end
 end)
 
 RegisterCommand('BccStablesStatus', function(source)
@@ -28,12 +33,12 @@ RegisterCommand('BccStablesContractSmokeTest', function(source)
         end
     end
     local tests = {
-        { 'foundation ready', ready.ok },
-        { 'capabilities', caps.contract == 1 and caps.features.sessionDiagnostics == 1 },
+        { 'foundation ready',        ready.ok },
+        { 'capabilities',            caps.contract == 1 and caps.features.sessionDiagnostics == 1 },
         { 'gameplay not advertised', caps.features.horses == nil and caps.features.commerce == nil },
-        { 'owned session route', route and route.owner == GetCurrentResourceName() and route.contract == 1 },
+        { 'owned session route',     route and route.owner == GetCurrentResourceName() and route.contract == 1 },
         { 'bounded character route', route and route.requireCharacter == true
-            and route.maxPayloadBytes == 64 and route.maxDepth == 2 and route.maxNodes == 4 },
+        and route.maxPayloadBytes == 64 and route.maxDepth == 2 and route.maxNodes == 4 },
         { 'payload validation', Stables.EmptyPayload({}) and not Stables.EmptyPayload({ characterId = 'spoofed' }) },
     }
     local passed = 0

@@ -21,8 +21,24 @@ local function paid(m)
 end
 
 test('clean migration and restart retain checksummed schema',function()
-    local m=fixture(); assert(m.start().ok and m.ddl==6)
-    m.reload(); local restarted=m.start(); assert(restarted.ok and restarted.value.applied==0 and m.ddl==6)
+    local m=fixture(); assert(m.start().ok and m.p.Health().schemaVersion==6 and m.ddl==12)
+    m.reload(); local restarted=m.start(); assert(restarted.ok and restarted.value.applied==0 and m.ddl==12)
+end)
+test('001-only upgrade adds later migrations without changing the applied checksum',function()
+    local m=fixture(); local migrations=m.env.Stables.Migrations
+    m.env.Stables.Migrations={migrations[1]}
+    assert(m.start().ok and m.ddl==6)
+    local checksum=m.db.ledger['001_purchase_foundation'].checksum
+    m.env.Stables.Migrations=migrations; m.reload(); local upgraded=m.start()
+    assert(upgraded.ok and upgraded.value.schemaVersion==6 and upgraded.value.applied==5 and m.ddl==12)
+    assert(m.db.ledger['001_purchase_foundation'].checksum==checksum)
+end)
+test('002 DDL failure resumes without reapplying 001',function()
+    local m=fixture(); m.failCreate='fs_asset_registrations'; assert(not m.start().ok)
+    assert(m.db.ledger['001_purchase_foundation'].state=='applied')
+    assert(m.db.ledger['002_asset_registration'].state=='pending')
+    m.failCreate=nil; m.reload(); local resumed=m.start()
+    assert(resumed.ok and resumed.value.applied==5 and resumed.value.resumed==1 and m.ddl==12)
 end)
 test('checksum drift and unknown recorded migrations fail closed',function()
     local m=fixture(); assert(m.start().ok)
@@ -40,7 +56,7 @@ test('interrupted DDL resumes its original intent without dropping data',functio
     assert(not m.start().ok and m.db.ledger['001_purchase_foundation'].state=='pending')
     assert(m.db.tables.fs_operations)
     m.failCreate=nil; m.reload(); local resumed=m.start()
-    assert(resumed.ok and resumed.value.resumed==1 and m.ddl==6)
+    assert(resumed.ok and resumed.value.resumed==1 and m.ddl==12)
 end)
 test('missing applied table is refused instead of recreated',function()
     local m=fixture(); assert(m.start().ok); m.db.tables.fs_horses=nil; m.reload()
@@ -49,7 +65,7 @@ end)
 test('completion recording failure stays pending for recovery',function()
     local m=fixture(); m.failLedger=true
     assert(m.start().code=='invalid_migration_ledger')
-    m.failLedger=false; m.reload(); assert(m.start().ok and m.ddl==6)
+    m.failLedger=false; m.reload(); assert(m.start().ok and m.ddl==12)
 end)
 test('readiness timeout and invalid capacity run no DDL',function()
     local m=fixture(); m.ready=false
@@ -71,46 +87,49 @@ test('capacity serialization retains uncertain reservations and releases cancell
     assert(m.r.Advance(t.operationId,t.characterId,0,'cancelled').ok)
     assert(m.r.Reserve(terms(2)).ok)
 end)
-test('stored owned horse replaces reservation in capacity accounting',function()
-    local m=fixture(); m.env.StablesConfig.ownedHorseLimit=1; assert(m.start().ok)
-    local t=paid(m)
-    assert(m.r.Advance(t.operationId,t.characterId,2,'fulfilled',{horseId=t.horseId,ownerCharacterId=t.characterId}).ok)
-    assert(m.r.Reserve(terms(2)).code=='capacity_exceeded')
-end)
-test('fulfillment atomically writes horse history outbox and final receipt',function()
+test('local horse evidence cannot fulfill a paid operation',function()
     local m=fixture(); assert(m.start().ok); local t=paid(m)
-    assert(m.r.Advance(t.operationId,t.characterId,2,'fulfilled',{horseId=t.horseId,ownerCharacterId=t.characterId}).ok)
-    assert(m.db.horses[t.horseId].availability=='stored' and m.db.history[t.operationId])
-    assert(m.db.outbox['stables.horse.acquired.v1:'..t.operationId])
-    assert(m.r.Get(t.operationId,t.characterId).value.state=='fulfilled')
-    assert(m.r.Advance(t.operationId,t.characterId,2,'fulfilled',{}).code=='revision_conflict')
+    assert(m.r.Advance(t.operationId,t.characterId,2,'fulfilled',{horseId=t.horseId,ownerCharacterId=t.characterId}).code=='assets_settlement_unavailable')
+    assert(m.r.Get(t.operationId,t.characterId).value.state=='paid')
+    assert(next(m.db.horses)==nil and next(m.db.history)==nil and next(m.db.outbox)==nil)
 end)
-test('history write failure rolls back horse and operation',function()
-    local m=fixture(); assert(m.start().ok); local t=paid(m); m.failHistory=true
-    assert(not m.r.Advance(t.operationId,t.characterId,2,'fulfilled',{horseId=t.horseId,ownerCharacterId=t.characterId}).ok)
-    assert(not m.db.horses[t.horseId] and next(m.db.history)==nil and next(m.db.outbox)==nil)
+
+test('caller fence cannot authorize compensation',function()
+    local m=fixture(); assert(m.start().ok); local t=paid(m)
+    assert(m.r.Advance(t.operationId,t.characterId,2,'compensation_pending',{fulfillmentFenced=true}).code=='assets_settlement_unavailable')
     assert(m.r.Get(t.operationId,t.characterId).value.state=='paid')
 end)
-test('CAS refusal rolls back all fulfillment side effects',function()
-    local m=fixture(); assert(m.start().ok); local t=paid(m); m.failCas=true
-    assert(m.r.Advance(t.operationId,t.characterId,2,'fulfilled',{horseId=t.horseId,ownerCharacterId=t.characterId}).code=='revision_conflict')
-    assert(next(m.db.horses)==nil and next(m.db.outbox)==nil)
-end)
-test('compensation cannot adopt or refund an already committed horse',function()
+
+test('refund evidence cannot bypass Assets settlement gate',function()
     local m=fixture(); assert(m.start().ok); local t=paid(m)
-    m.db.horses[t.horseId]={horse_id=t.horseId,origin_operation_id=t.operationId,owner_character_id=t.characterId}
-    assert(m.r.Advance(t.operationId,t.characterId,2,'compensation_pending',{fulfillmentFenced=true}).code=='fulfillment_exists')
+    assert(m.r.Advance(t.operationId,t.characterId,2,'refunded',{refundReceipt=receipt(t)}).code=='assets_settlement_unavailable')
+    assert(m.r.Get(t.operationId,t.characterId).value.state=='paid')
 end)
-test('fenced refund releases capacity and blocks late fulfillment',function()
+
+test('blocked fulfillment and compensation retain reserved capacity after restart',function()
     local m=fixture(); m.env.StablesConfig.ownedHorseLimit=1; assert(m.start().ok); local t=paid(m)
-    assert(m.r.Advance(t.operationId,t.characterId,2,'compensation_pending',{fulfillmentFenced=true}).ok)
-    local refund=receipt(t); refund.transactionId='80000000-0000-4000-8000-000000000008'; refund.operation='reversal'
-    refund.reasonCode='stables.payment_reversal'; refund.referenceType='economy_transaction'; refund.referenceId=receipt(t).transactionId
-    refund.fromAccountId,refund.toAccountId=t.sinkAccountId,t.walletAccountId
-    assert(m.r.Advance(t.operationId,t.characterId,3,'refunded',{refundReceipt=refund}).ok)
-    assert(m.r.Reserve(terms(2)).ok)
-    assert(not m.r.Advance(t.operationId,t.characterId,4,'fulfilled',{horseId=t.horseId,ownerCharacterId=t.characterId}).ok)
+    for _,target in ipairs({'fulfilled','compensation_pending','refunded'}) do
+        assert(m.r.Advance(t.operationId,t.characterId,2,target,{}).code=='assets_settlement_unavailable')
+    end
+    m.reload(); assert(m.start().ok)
+    assert(m.r.Get(t.operationId,t.characterId).value.state=='paid')
+    assert(m.r.Reserve(terms(2)).code=='capacity_exceeded')
 end)
+
+test('CAS refusal rolls back operation revision and payment evidence',function()
+    local m=fixture(); assert(m.start().ok); local t=terms(); assert(m.r.Reserve(t).ok)
+    m.failCas=true
+    assert(m.r.Advance(t.operationId,t.characterId,0,'payment_pending').code=='revision_conflict')
+    local record=m.r.Get(t.operationId,t.characterId).value
+    assert(record.state=='reserved' and record.revision==0 and record.paymentReceipt==nil)
+end)
+
+test('paid uncertainty can enter reconciliation without horse or refund writes',function()
+    local m=fixture(); assert(m.start().ok); local t=paid(m)
+    assert(m.r.Advance(t.operationId,t.characterId,2,'reconciliation_required',{code='assets_unknown'}).ok)
+    assert(next(m.db.horses)==nil and next(m.db.history)==nil and next(m.db.outbox)==nil)
+end)
+
 test('identity columns and corrupt JSON fail closed',function()
     local m=fixture(); assert(m.start().ok); local t=terms(); assert(m.r.Reserve(t).ok)
     m.db.operations[t.operationId].amount=1
@@ -143,4 +162,72 @@ test('foundation refusal blocks repository writes before opening a transaction',
     m.env.Stables.Foundation={RequireReady=function() return m.env.Stables.Err('not_ready','Core degraded.') end}
     assert(m.r.Reserve(terms()).code=='not_ready' and next(m.db.operations)==nil and next(m.db.characters)==nil)
 end)
+test('002 upgrade adds call tables while retaining prior checksums and character data',function()
+    local m=fixture(); local migrations=m.env.Stables.Migrations
+    m.env.Stables.Migrations={migrations[1],migrations[2]}; assert(m.start().ok and m.p.Health().schemaVersion==2)
+    local first=m.db.ledger['001_purchase_foundation'].checksum; local second=m.db.ledger['002_asset_registration'].checksum
+    m.db.characters.retained={character_id='retained',revision=2}
+    m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
+    assert(r.ok and r.value.schemaVersion==6 and r.value.applied==4 and m.ddl==12)
+    assert(m.db.ledger['001_purchase_foundation'].checksum==first and m.db.ledger['002_asset_registration'].checksum==second)
+    assert(m.db.characters.retained.revision==2)
+end)
+test('003 interrupted second table resumes without reapplying 001 or 002',function()
+    local m=fixture(); m.failCreate='fs_call_slots'; assert(not m.start().ok)
+    assert(m.db.ledger['002_asset_registration'].state=='applied' and m.db.ledger['003_call_generations'].state=='pending')
+    m.failCreate=nil; m.reload(); local r=m.start()
+    assert(r.ok and r.value.applied==4 and r.value.resumed==1 and m.ddl==12)
+end)
+
+test('003 upgrade adds later lifecycle tables and preserves every previous checksum',function()
+    local m=fixture(); local migrations=m.env.Stables.Migrations
+    m.env.Stables.Migrations={migrations[1],migrations[2],migrations[3]}; assert(m.start().ok and m.ddl==9)
+    local checksums={}; for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
+    m.db.characters.retained={character_id='retained',revision=4}
+    m.db.horses.retained={horse_id='retained',availability='stored',revision=0}
+    m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
+    assert(r.ok and r.value.schemaVersion==6 and r.value.applied==3 and m.ddl==12)
+    for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
+    assert(m.db.characters.retained.revision==4 and m.db.horses.retained.availability=='stored')
+end)
+
+test('004 interrupted DDL resumes original ledger without altering prior migrations',function()
+    local m=fixture(); m.failCreate='fs_call_bindings'; assert(not m.start().ok)
+    assert(m.db.ledger['003_call_generations'].state=='applied' and m.db.ledger['004_call_bindings'].state=='pending')
+    m.failCreate=nil; m.reload(); local r=m.start()
+    assert(r.ok and r.value.applied==3 and r.value.resumed==1 and m.ddl==12)
+end)
+
+test('004 upgrade adds process receipt table without changing prior checksums',function()
+    local m=fixture(); local migrations=m.env.Stables.Migrations
+    m.env.Stables.Migrations={migrations[1],migrations[2],migrations[3],migrations[4]}
+    assert(m.start().ok and m.ddl==10)
+    local checksums={}; for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
+    m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
+    assert(r.ok and r.value.schemaVersion==6 and r.value.applied==2 and m.ddl==12)
+    for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
+end)
+test('005 interrupted process receipt table migration resumes safely',function()
+    local m=fixture(); m.failCreate='fs_call_process_epochs'; assert(not m.start().ok)
+    assert(m.db.ledger['004_call_bindings'].state=='applied' and m.db.ledger['005_call_process_epochs'].state=='pending')
+    m.failCreate=nil; m.reload(); local r=m.start()
+    assert(r.ok and r.value.applied==2 and r.value.resumed==1 and m.ddl==12)
+end)
+
+test('005 upgrade adds recovery audit while preserving all existing migrations',function()
+    local m=fixture(); local migrations=m.env.Stables.Migrations
+    m.env.Stables.Migrations={}; for n=1,5 do m.env.Stables.Migrations[n]=migrations[n] end
+    assert(m.start().ok and m.ddl==11)
+    local checksums={}; for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
+    m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
+    assert(r.ok and r.value.schemaVersion==6 and r.value.applied==1 and m.ddl==12)
+    for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
+end)
+test('006 interrupted recovery audit migration resumes without replaying prior schema',function()
+    local m=fixture(); m.failCreate='fs_call_recoveries'; assert(not m.start().ok)
+    assert(m.db.ledger['005_call_process_epochs'].state=='applied' and m.db.ledger['006_call_recoveries'].state=='pending')
+    m.failCreate=nil; m.reload(); local r=m.start()
+    assert(r.ok and r.value.applied==1 and r.value.resumed==1 and m.ddl==12)
+end)
+
 print(('%d/%d persistence cases passed; SQL/CFX are modeled, live concurrency pending.'):format(count,count))
