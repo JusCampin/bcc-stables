@@ -21,7 +21,9 @@ local function fixture(mode)
         end
         if route=='stables.purchase.fulfill.v1' or route=='stables.purchase.fulfillment.get.v1' then
             value={operationId=ID,horseId=ID,assetId='90000000-0000-4000-8000-000000000009',state='fulfilled',
-                revision=3,availability='stored',outboxPending=true,gameplayAvailable=false}
+                revision=3,availability='stored',projectionRevision=0,outboxPending=true,gameplayAvailable=false}
+            if mode=='active-projection' then value.availability='active'; value.projectionRevision=1 end
+            if mode=='bad-projection' then value.availability='active' end
         end
         if mode=='malformed' then value.price.amount=-1 end
         callback({ok=true,value=value})
@@ -58,4 +60,7 @@ m=fixture(); m.run('BccStablesAdmissionFulfill'); assert(m.logs[1]:find('state=f
 print('PASS stored horse client reports atomic fulfillment receipt')
 m=fixture(); m.run('BccStablesStoredHorseInspect'); assert(m.calls[1].payload.operationId==ID and m.logs[1]:find('gameplayAvailable=false',1,true))
 print('PASS stored horse client explicit inspect preserves no-spawn contract')
-print('12/12 admission client cases passed; CFX remains pending.')
+m=fixture('active-projection'); m.run('BccStablesStoredHorseInspect'); assert(m.logs[1]:find('availability=active projectionRevision=1',1,true))
+m=fixture('bad-projection'); m.run('BccStablesStoredHorseInspect'); assert(not m.logs[1]:find('PASS',1,true))
+print('PASS fulfilled horse client accepts current active state and rejects inconsistent revision')
+print('13/13 admission client cases passed; CFX remains pending.')

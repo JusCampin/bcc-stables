@@ -11,6 +11,7 @@ local health = {
 local subscriptions = {}
 
 local function Fail(result)
+    if Stables.OwnedSnapshot then Stables.OwnedSnapshot.Stop() end
     if Stables.NativeCalls then Stables.NativeCalls.Stop() end
     if Stables.Outbox then Stables.Outbox.Stop() end
     if Stables.Quotes then Stables.Quotes.Stop() end
@@ -54,6 +55,8 @@ function F.RequireReady()
     local economy = Stables.Economy and Stables.Economy.RequireReady()
     if not economy or not economy.ok then return Fail(economy or
         Stables.Err('economy_unavailable', 'Economy consumer is missing.')) end
+    local snapshot=Stables.OwnedSnapshot and Stables.OwnedSnapshot.RequireReady()
+    if not snapshot or not snapshot.ok then return Fail(snapshot or Stables.Err('owned_snapshot_unavailable','Snapshot reader missing.')) end
     -- Do not accept requests when Core reports migration/failure/degraded state.
     local result = Stables.Core.Call('GetHealth')
     if not result.ok then return Fail(result) end
@@ -96,6 +99,7 @@ end
 
 function F.Stop(reason)
     if health.state == 'stopping' or health.state == 'stopped' then return end
+    if Stables.OwnedSnapshot then Stables.OwnedSnapshot.Stop() end
     if Stables.NativeCalls then Stables.NativeCalls.Stop() end
     health.state, health.reason = 'stopping', reason or 'resource_stopping'
     if Stables.Outbox then Stables.Outbox.Stop() end
@@ -214,6 +218,11 @@ function F.Start()
     if health.state ~= 'starting' then return Stables.Err('startup_cancelled', 'Startup was cancelled.') end
     health.checks.persistence = Stables.Copy(persisted.value)
     health.checks.persistence.ok = true
+    if not Stables.OwnedSnapshot then return Fail(Stables.Err('owned_snapshot_unavailable','Owned snapshot reader is missing.')) end
+    local snapshot=Stables.OwnedSnapshot.Start()
+    if health.state~='starting' then Stables.OwnedSnapshot.Stop(); return Stables.Err('startup_cancelled','Startup was cancelled.') end
+    if not snapshot.ok then return Fail(snapshot) end
+    health.checks.ownedSnapshot=Stables.Copy(snapshot.value)
     if not Stables.Outbox then return Fail(Stables.Err('internal_error', 'Outbox module is missing.')) end
     local outbox = Stables.Outbox.Start()
     if not outbox.ok then return Fail(outbox) end
@@ -286,7 +295,7 @@ function F.Start()
         proofRoutes = installed.value.routes
     end
     if health.state ~= 'starting' then return Stables.Err('startup_cancelled', 'Startup was cancelled.') end
-    health.checks.registrations = { ok = true, subscriptions = #subscriptions, routes = 27 + proofRoutes }
+    health.checks.registrations = { ok = true, subscriptions = #subscriptions, routes = 30 + proofRoutes }
     health.state, health.reason = 'ready', 'foundation_only'
     Stables.Outbox.Run()
     Stables.NativeCalls.Run()

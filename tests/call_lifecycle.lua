@@ -30,7 +30,7 @@ test('binding persists exact identity and active generation atomically',function
     assert(r.ok and r.value.state=='active' and r.value.revision==2)
     local b=m.db.callBindings[m.id]
     assert(b.observer_id==m.identity.observerId and b.network_id==71 and b.initial_owner==1 and b.routing_bucket==0)
-    assert(m.get().value.state=='active' and m.db.horses[m.t.horseId].availability=='stored')
+    assert(m.get().value.state=='active' and m.db.horses[m.t.horseId].availability=='active' and m.db.horses[m.t.horseId].revision==1)
 end)
 
 test('duplicate bind cannot replace durable network identity',function()
@@ -295,6 +295,94 @@ test('replaying recovery from a later process retains the original audit unchang
     local r=m.l.ResolveProcessEnded(m.t.characterId,m.id,later)
     assert(r.ok and r.value.replayed and r.value.recovery.resolvedProcessEpoch==NEW)
     assert(m.db.callRecoveries[m.id].resolved_epoch==NEW)
+end)
+
+test('lifecycle mutations validate under locks without standalone lease snapshot',function()
+    local m=fixture(); local validate=m.l.ValidateSavedState; local reads=0
+    m.S.CallRepository.Get=function() error('redundant pre-transaction snapshot') end
+    m.l.ValidateSavedState=function(tx,lease,row)
+        assert(m.inTx and m.locked==m.t.characterId)
+        reads=reads+1; return validate(tx,lease,row)
+    end
+    assert(m.l.RecordProcessEpoch(m.context,m.id,'f0000000-0000-4000-8000-000000000001').ok)
+    assert(reads==1)
+    assert(m.bind().ok)
+    assert(m.begin().ok)
+    assert(m.finish().ok)
+end)
+
+test('locked lifecycle validation refuses contradictory binding before callback',function()
+    local m=fixture(); local called=false
+    m.db.callBindings[m.id]={generation_id=m.id}
+    local r=m.S.CallRepository.WithLease(m.t.characterId,m.id,function() called=true; return m.S.Ok(true) end)
+    assert(r.code=='invalid_call_binding' and not called)
+    assert(m.db.callLeases[m.id].state=='submitting' and m.db.callSlots[m.t.characterId])
+end)
+
+test('lifecycle batches exact slot lease binding keys in order',function()
+    local m=fixture(); local transaction=m.env.DB.transaction; local seen=0
+    m.env.DB.transaction=function(body) return transaction(function(tx)
+        local batch=tx.batch
+        tx.batch=function(statements)
+            if statements[1].sql:find('fs_call_slots',1,true) then
+                seen=seen+1; assert(#statements==3)
+                assert(statements[1].params[1]==m.t.characterId)
+                assert(statements[2].sql:find('fs_call_leases',1,true) and statements[2].params[1]==m.id)
+                assert(statements[3].sql:find('fs_call_bindings',1,true) and statements[3].params[1]==m.id)
+            end
+            return batch(statements)
+        end
+        return body(tx)
+    end) end
+    assert(m.l.RecordProcessEpoch(m.context,m.id,'f0000000-0000-4000-8000-000000000001').ok and seen==1)
+end)
+
+test('malformed lifecycle batch cannot invoke callback or release slot',function()
+    for _,bad in ipairs({false,{},{{},{}} ,{{{},{}},{},{}}}) do
+        local m=fixture(); local transaction=m.env.DB.transaction; local called=false
+        m.env.DB.transaction=function(body) return transaction(function(tx) tx.batch=function() return bad end; return body(tx) end) end
+        local r=m.S.CallRepository.WithLease(m.t.characterId,m.id,function() called=true; return m.S.Ok(true) end)
+        assert(r.code=='invalid_call' and not called and m.db.callSlots[m.t.characterId])
+        assert(m.db.callLeases[m.id].state=='submitting')
+    end
+end)
+
+test('binding batches projection and identity writes in existing transaction order',function()
+    local m=fixture(); local transaction=m.env.DB.transaction; local seen={}
+    m.env.DB.transaction=function(body) return transaction(function(tx)
+        local batch=tx.batch
+        tx.batch=function(statements)
+            if statements[1].sql:find('INSERT INTO fs_horse_runtime_events',1,true) then
+                assert(#statements==2 and statements[2].sql:find('UPDATE fs_horses',1,true)); seen[#seen+1]='projection'
+            elseif statements[1].sql:find('INSERT INTO fs_call_bindings',1,true) then
+                assert(#statements==2 and statements[2].sql:find('UPDATE fs_call_leases',1,true)); seen[#seen+1]='binding'
+            end
+            return batch(statements)
+        end
+        return body(tx)
+    end) end
+    assert(m.bind().ok and table.concat(seen,',')=='projection,binding')
+end)
+
+test('failed batched binding write headers roll back projection identity and lease together',function()
+    for _,kind in ipairs({'fs_horse_runtime_events','fs_call_bindings'}) do
+        for _,index in ipairs({1,2}) do
+            local m=fixture(); local transaction=m.env.DB.transaction
+            m.env.DB.transaction=function(body) return transaction(function(tx)
+                local batch=tx.batch
+                tx.batch=function(statements)
+                    local rows=batch(statements)
+                    if statements[1].sql:find('INSERT INTO '..kind,1,true) then rows[index]={affectedRows=0} end
+                    return rows
+                end
+                return body(tx)
+            end) end
+            assert(not m.bind().ok)
+            assert(m.db.callLeases[m.id].state=='submitting' and not m.db.callBindings[m.id])
+            assert(m.db.horses[m.t.horseId].availability=='stored' and m.db.horses[m.t.horseId].revision==0)
+            assert(next(m.db.runtimeEvents)==nil and m.db.callSlots[m.t.characterId].generation_id==m.id)
+        end
+    end
 end)
 
 print(count..'/'..count..' internal lifecycle cases passed; live native observation is not modeled as authority.')

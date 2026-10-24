@@ -189,4 +189,28 @@ Stables.Migrations = {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]] },
     } },
 
+    { id = '007_horse_runtime_projection', tables = {
+        { name = 'fs_horse_runtime_events', sql = [[CREATE TABLE IF NOT EXISTS `fs_horse_runtime_events` (
+            `event_id` VARCHAR(100) NOT NULL,
+            `horse_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `generation_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `from_availability` VARCHAR(24) NOT NULL,
+            `to_availability` VARCHAR(24) NOT NULL,
+            `prior_revision` BIGINT UNSIGNED NOT NULL,
+            `revision` BIGINT UNSIGNED NOT NULL,
+            `reason` VARCHAR(32) NOT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`event_id`), UNIQUE KEY `fs_runtime_horse_revision` (`horse_id`,`revision`),
+            UNIQUE KEY `fs_runtime_generation_state` (`generation_id`,`to_availability`),
+            CONSTRAINT `fs_runtime_horse` FOREIGN KEY (`horse_id`) REFERENCES `fs_horses` (`horse_id`),
+            CONSTRAINT `fs_runtime_generation` FOREIGN KEY (`generation_id`) REFERENCES `fs_call_leases` (`generation_id`),
+            CHECK (`revision` = `prior_revision` + 1 AND `revision` <= 9007199254740991),
+            CHECK ((`from_availability` = 'stored' AND `to_availability` = 'active' AND `reason` = 'bound') OR
+                (`from_availability` = 'active' AND `to_availability` = 'stored' AND `reason` IN ('observed_cleanup','process_ended')))
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]] },
+    } },
+
+    { id='008_call_horse_state_index', tables={}, indexes={
+        {table='fs_call_leases',name='fs_call_horse_state',columns={'horse_id','state'}}
+    } },
 }

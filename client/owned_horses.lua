@@ -23,12 +23,15 @@ local function Validate(item)
     return type(item) == 'table' and Uuid(item.horseId) and Uuid(item.assetId) and Uuid(item.operationId)
         and type(item.modelKey) == 'string' and #item.modelKey <= 100 and item.modelKey:match('^a_c_horse_[a-z0-9_]+$')
         and type(item.assetRevision) == 'number' and item.assetRevision % 1 == 0 and item.assetRevision >= 1
-        and item.availability == 'stored' and item.gameplayAvailable == false
+        and (item.availability == 'stored' or item.availability == 'active') and item.gameplayAvailable == false
+        and type(item.projectionRevision)=='number' and item.projectionRevision%1==0
+        and item.projectionRevision>=0 and item.projectionRevision<=9007199254740991
+        and (item.availability=='active')==(item.projectionRevision%2==1)
 end
 local function Print(item)
-    print(('[bcc-stables] horseId=%s assetId=%s model=%s availability=stored assetRevision=%d gameplayAvailable=false')
+    print(('[bcc-stables] horseId=%s assetId=%s model=%s availability=%s projectionRevision=%d assetRevision=%d gameplayAvailable=false')
         :format(
-            item.horseId, item.assetId, item.modelKey, item.assetRevision))
+            item.horseId, item.assetId, item.modelKey, item.availability, item.projectionRevision, item.assetRevision))
 end
 local function Command(name, body)
     RegisterCommand(name, function(_, args)

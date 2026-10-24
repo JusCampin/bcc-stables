@@ -12,8 +12,10 @@ local function fixture(mode)
         if mode=='timeout' then return end
         if mode=='denied' then callback(nil,{code='horse_not_found'}); return end
         if mode=='disabled' then callback(nil,{code='selection_disabled'}); return end
-        local item={horseId=ID,operationId=ID,assetId=ASSET,assetRevision=1,modelKey='a_c_horse_morgan_bay',availability='stored',gameplayAvailable=false}
+        local item={horseId=ID,operationId=ID,assetId=ASSET,assetRevision=1,modelKey='a_c_horse_morgan_bay',availability='stored',projectionRevision=0,gameplayAvailable=false}
         if mode=='malformed' then item.gameplayAvailable=true end
+        if mode=='owned-active' then item.availability='active'; item.projectionRevision=1 end
+        if mode=='bad-projection' then item.availability='active'; item.projectionRevision=0 end
         local value=route=='stables.horses.list.v1' and {items=mode=='empty' and {} or {item},pageSize=10,selectionAvailable=false,gameplayAvailable=false} or item
         if route:find('stables.horses.selection.',1,true)==1 then
             local clear=route=='stables.horses.selection.clear.v1'
@@ -75,4 +77,7 @@ print('PASS call client inspects durable lifecycle states without advertising na
 m=fixture('recovered'); m.run('BccStablesCallInspect',{ID}); assert(m.logs[1]:find('revision=5',1,true))
 m=fixture('bad-recovery'); m.run('BccStablesCallInspect',{ID}); assert(not m.logs[1]:find('PASS',1,true))
 print('PASS call client accepts audited recovery revision and rejects unknown released revision')
-print('13/13 owned horse selection and call client cases passed; CFX remains pending.')
+m=fixture('owned-active'); m.run('BccStablesOwnedHorseInspect',{ID}); assert(m.logs[2]:find('availability=active projectionRevision=1',1,true))
+m=fixture('bad-projection'); m.run('BccStablesOwnedHorseInspect',{ID}); assert(not m.logs[1]:find('PASS',1,true))
+print('PASS owned horse client displays active revision and rejects contradictory projection')
+print('14/14 owned horse selection and call client cases passed; CFX remains pending.')

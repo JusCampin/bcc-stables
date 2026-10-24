@@ -109,14 +109,17 @@ Command('BccStablesAdmissionAssetInspect', function(id)
 end)
 local function Stored(value, id)
     assert(type(value) == 'table' and value.operationId == id and value.state == 'fulfilled' and
-        value.availability == 'stored'
+        (value.availability == 'stored' or value.availability == 'active')
+        and type(value.projectionRevision)=='number' and value.projectionRevision%1==0
+        and value.projectionRevision>=0 and value.projectionRevision<=9007199254740991
+        and (value.availability=='active')==(value.projectionRevision%2==1)
         and type(value.horseId) == 'string' and #value.horseId == 36 and type(value.assetId) == 'string' and
         #value.assetId == 36
         and type(value.revision) == 'number' and value.revision % 1 == 0 and value.revision >= 3
         and type(value.outboxPending) == 'boolean' and value.gameplayAvailable == false, 'invalid_result')
-    print(('[bcc-stables] stored horse RPC PASS; operationId=%s horseId=%s assetId=%s state=fulfilled revision=%d outboxPending=%s gameplayAvailable=false')
+    print(('[bcc-stables] fulfilled horse RPC PASS; operationId=%s horseId=%s assetId=%s state=fulfilled revision=%d availability=%s projectionRevision=%d outboxPending=%s gameplayAvailable=false')
     :format(
-        id, value.horseId, value.assetId, value.revision, tostring(value.outboxPending)))
+        id, value.horseId, value.assetId, value.revision, value.availability, value.projectionRevision, tostring(value.outboxPending)))
 end
 Command('BccStablesAdmissionFulfill', function(id)
     Stored(Rpc('stables.purchase.fulfill.v1', { operationId = id }), id)

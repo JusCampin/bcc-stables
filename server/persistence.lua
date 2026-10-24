@@ -4,7 +4,10 @@ local health = { state = 'starting', schemaVersion = 0 }
 
 function P.Checksum(migration)
     local hash = 2166136261
-    for _, definition in ipairs(migration.tables) do
+    local definitions={}
+    for _,v in ipairs(migration.tables) do definitions[#definitions+1]=v end
+    for _,v in ipairs(migration.indexes or {}) do definitions[#definitions+1]={name=v.name,sql=v.table..'|'..table.concat(v.columns,',')} end
+    for _, definition in ipairs(definitions) do
         local text = definition.name .. '\n' .. definition.sql .. '\n'
         for index = 1, #text do hash = ((hash ~ text:byte(index)) * 16777619) & 0xffffffff end
     end
@@ -36,6 +39,26 @@ local function Exists(name)
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?]], name)) or 0) == 1
 end
 
+-- Nil means absent, false means present with a different definition.
+local function IndexMatches(definition)
+    local rows=DB.query([[SELECT COLUMN_NAME,SEQ_IN_INDEX,NON_UNIQUE,SUB_PART,INDEX_TYPE,COLLATION
+        FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND INDEX_NAME=?
+        ORDER BY SEQ_IN_INDEX]],definition.table,definition.name)
+    if type(rows)~='table' then return false end
+    if #rows==0 then return nil end
+    if #rows~=#definition.columns then return false end
+    for i,row in ipairs(rows) do
+        if row.COLUMN_NAME~=definition.columns[i] or tonumber(row.SEQ_IN_INDEX)~=i
+            or tonumber(row.NON_UNIQUE)~=1 or row.SUB_PART~=nil or row.INDEX_TYPE~='BTREE'
+            or row.COLLATION~='A' then return false end
+    end
+    return true
+end
+local function CreateIndex(definition)
+    local columns={}; for _,name in ipairs(definition.columns) do columns[#columns+1]='`'..name..'`' end
+    DB.exec('ALTER TABLE `'..definition.table..'` ADD INDEX `'..definition.name..'` ('..table.concat(columns,',')..')')
+end
+
 function P.Start()
     local limit = StablesConfig.ownedHorseLimit
     if type(limit) ~= 'number' or limit % 1 ~= 0 or limit < 1 or limit > 100 then
@@ -50,9 +73,9 @@ function P.Start()
             `state` VARCHAR(16) NOT NULL, `applied_at` TIMESTAMP NULL,
             PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]])
-        local known, tables, ledger = {}, {}, {}
+        local known, tables, ledger, indexes = {}, {}, {}, {}
         for _, migration in ipairs(Stables.Migrations) do
-            if type(migration.id) ~= 'string' or known[migration.id] or #migration.tables == 0 then
+            if type(migration.id) ~= 'string' or known[migration.id] or (#migration.tables == 0 and #(migration.indexes or {}) == 0) then
                 return Stables.Err('invalid_migration', 'Migration definition is invalid.')
             end
             known[migration.id] = P.Checksum(migration)
@@ -64,6 +87,17 @@ function P.Start()
                         'Only owned idempotent CREATE TABLE statements are supported.')
                 end
                 tables[definition.name] = true
+            end
+            for _,definition in ipairs(migration.indexes or {}) do
+                local key=definition.table..'.'..definition.name
+                if not tables[definition.table] or not definition.name:match('^fs_[a-z_]+$') or indexes[key]
+                    or #definition.columns<1 or #definition.columns>8 then
+                    return Stables.Err('invalid_migration','Owned named index definition required.')
+                end
+                for _,column in ipairs(definition.columns) do
+                    if not column:match('^[a-z_]+$') then return Stables.Err('invalid_migration','Invalid index column.') end
+                end
+                indexes[key]=definition
             end
         end
         for _, row in ipairs(DB.query('SELECT id,checksum,state FROM fs_schema_migrations') or {}) do
@@ -83,6 +117,9 @@ function P.Start()
                     if Exists(definition.name) then return Stables.Err('untracked_schema',
                             'Untracked Stables table exists; inspect before adopting or modifying it.') end
                 end
+                for _,definition in ipairs(migration.indexes or {}) do
+                    if IndexMatches(definition)~=nil then return Stables.Err('untracked_schema','Untracked Stables index exists; inspect before adoption.') end
+                end
                 DB.exec("INSERT IGNORE INTO fs_schema_migrations (id,checksum,state) VALUES (?,?,'pending')",
                     migration.id, known[migration.id])
                 row = DB.one('SELECT id,checksum,state FROM fs_schema_migrations WHERE id=?', migration.id)
@@ -93,6 +130,12 @@ function P.Start()
             end
             if row.state ~= 'applied' then
                 for _, definition in ipairs(migration.tables) do DB.exec(definition.sql) end
+                for _,definition in ipairs(migration.indexes or {}) do
+                    local matched=IndexMatches(definition)
+                    if matched==false then return Stables.Err('schema_index_mismatch','Pending index definition disagrees; inspect before resuming.') end
+                    if matched==nil then CreateIndex(definition) end
+                    if IndexMatches(definition)~=true then return Stables.Err('schema_index_mismatch','Index creation did not produce the expected definition.') end
+                end
                 DB.exec(
                 "UPDATE fs_schema_migrations SET state='applied',applied_at=CURRENT_TIMESTAMP WHERE id=? AND checksum=?",
                     migration.id, known[migration.id])
@@ -106,6 +149,11 @@ function P.Start()
         for name in pairs(tables) do
             if not Exists(name) then return Stables.Err('schema_incomplete',
                     'An applied Stables table is missing; restore it rather than silently recreating player data.') end
+        end
+        for _,definition in pairs(indexes) do
+            local matched=IndexMatches(definition)
+            if matched~=true then return Stables.Err(matched==nil and 'schema_incomplete' or 'schema_index_mismatch',
+                'Applied Stables index is missing or changed; inspect before repair.') end
         end
         if health.state == 'stopped' then return Stables.Err('startup_cancelled', 'Persistence startup was cancelled.') end
         return Stables.Ok({ schemaVersion = #Stables.Migrations, applied = applied, resumed = resumed })
@@ -134,6 +182,7 @@ RegisterCommand('BccStablesPersistenceSmokeTest', function(source)
                     row and row.state == 'applied' and row.checksum == P.Checksum(migration) }
                 for _, definition in ipairs(migration.tables) do tests[#tests + 1] = { definition.name .. ' exists',
                         Exists(definition.name) } end
+                for _,definition in ipairs(migration.indexes or {}) do tests[#tests+1]={definition.name..' definition',IndexMatches(definition)==true} end
             end
             local passed = 0
             for _, test in ipairs(tests) do

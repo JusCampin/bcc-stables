@@ -71,10 +71,12 @@ local function Save(characterId, expected, horse)
             local projection = tx.one('SELECT * FROM fs_horses WHERE horse_id=? AND owner_character_id=? FOR UPDATE',
                 horse.horseId, characterId)
             if not projection or projection.horse_id ~= horse.horseId or projection.owner_character_id ~= characterId
-                or projection.origin_operation_id ~= horse.operationId or projection.availability ~= 'stored'
+                or projection.origin_operation_id ~= horse.operationId or (projection.availability ~= 'stored' and projection.availability ~= 'active')
                 or projection.biological_state ~= 'alive' then
-                result = S.Err('horse_not_found', 'An owned stored horse is required.'); return false
+                result = S.Err('horse_not_found', 'An owned horse with valid lifecycle state is required.'); return false
             end
+            local projected=S.HorseProjection.Validate(tx,projection,{assetId=horse.assetId,modelKey=horse.modelKey})
+            if not projected.ok then result=projected; return false end
         end
         local desired = horse and horse.horseId or nil
         if desired == current.horseId then

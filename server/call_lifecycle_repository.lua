@@ -22,8 +22,7 @@ local function Identity(row,lease)
     return S.Ok({generationId=row.generation_id,observerId=row.observer_id,netId=tonumber(row.network_id),
         initialOwner=tonumber(row.initial_owner),bucket=0,state=row.state,revision=revision,reason=row.reason})
 end
-function L.ValidateState(tx,lease)
-    local row=tx.one('SELECT * FROM fs_call_bindings WHERE generation_id=?',lease.generationId)
+local function ValidateState(tx,lease,row)
     if lease.state=='released' and lease.revision==5 then return L.RecoveryBinding(tx,lease,row) end
     if lease.state=='prepared' or lease.state=='submitting' or (lease.state=='released' and lease.revision==1)
         or (lease.state=='reconciliation_required' and lease.revision==2) then
@@ -38,6 +37,13 @@ function L.ValidateState(tx,lease)
         return S.Err('invalid_call_binding','Generation and binding states disagree.')
     end
     return binding
+end
+-- Database-row validation only, never proof that a native entity is observed.
+-- Projection reads may supply the binding fetched in their same SQL batch.
+function L.ValidateSavedState(tx,lease,row) return ValidateState(tx,lease,row) end
+function L.ValidateState(tx,lease)
+    local row=tx.one('SELECT * FROM fs_call_bindings WHERE generation_id=?',lease.generationId)
+    return ValidateState(tx,lease,row)
 end
 local function Advance(tx,v,state)
     if tx.exec('UPDATE fs_call_leases SET state=?,revision=revision+1 WHERE generation_id=? AND character_id=? AND state=? AND revision=?',
@@ -54,24 +60,34 @@ local function Observation(identity,v)
 end
 function L.Bind(context,generationId,identity)
     identity=S.Copy(identity)
-    return S.CallRepository.WithLease(context.characterId,generationId,function(tx,v)
+    return S.CallRepository.WithLease(context.characterId,generationId,function(tx,v,slot,checkedBinding)
         if v.state~='submitting' then return S.Err('binding_conflict','Only an unbound submission may bind.') end
         if v.sessionId~=context.sessionId or v.source~=context.source then
             return S.Err('call_recovery_required','Binding requires the original session.')
         end
         if not Observation(identity,v) then return S.Err('invalid_call_binding','Server-observed identity required.') end
-        local previous=L.ValidateState(tx,v); if not previous.ok then return previous end
-        if tx.exec([[INSERT INTO fs_call_bindings
-            (generation_id,observer_id,network_id,initial_owner,routing_bucket) VALUES (?,?,?,?,?)]],
-            v.generationId,identity.observerId,identity.netId,identity.initialOwner,0)~=1 then
+        local previous=checkedBinding; if not previous.ok then return previous end
+        local projection=S.HorseProjection.Activate(tx,v); if not projection.ok then return projection end
+        local writes=tx.batch({
+            DB.stmt([[INSERT INTO fs_call_bindings
+                (generation_id,observer_id,network_id,initial_owner,routing_bucket) VALUES (?,?,?,?,?)]],
+                v.generationId,identity.observerId,identity.netId,identity.initialOwner,0),
+            DB.stmt('UPDATE fs_call_leases SET state=?,revision=revision+1 WHERE generation_id=? AND character_id=? AND state=? AND revision=?',
+                'active',v.generationId,v.characterId,v.state,v.revision)
+        })
+        if type(writes)~='table' or #writes~=2 or type(writes[1])~='table' or writes[1].affectedRows~=1 then
             return S.Err('binding_not_saved','Bound identity was not saved.')
         end
-        return Advance(tx,v,'active')
+        if type(writes[2])~='table' or writes[2].affectedRows~=1 then
+            return S.Err('revision_conflict','Lifecycle generation changed; transaction rolled back.')
+        end
+        v.state,v.revision='active',v.revision+1
+        return S.Ok(v)
     end)
 end
 function L.BeginCleanup(characterId,generationId)
-    return S.CallRepository.WithLease(characterId,generationId,function(tx,v)
-        local binding=L.ValidateState(tx,v); if not binding.ok then return binding end
+    return S.CallRepository.WithLease(characterId,generationId,function(tx,v,slot,checkedBinding)
+        local binding=checkedBinding; if not binding.ok then return binding end
         if v.state=='cleanup_pending' or (v.state=='released' and v.revision==4) then return S.Ok(v) end
         if v.state~='active' then return S.Err('call_reconciliation_required','Unbound or uncertain submission cannot be released.') end
         if tx.exec("UPDATE fs_call_bindings SET state='cleanup_pending',revision=1 WHERE generation_id=? AND state='bound' AND revision=0",
@@ -83,8 +99,8 @@ end
 -- This method does not inspect entities or accept a client acknowledgment.
 function L.FinishCleanup(characterId,generationId,evidence)
     evidence=S.Copy(evidence)
-    return S.CallRepository.WithLease(characterId,generationId,function(tx,v)
-        local binding=L.ValidateState(tx,v); if not binding.ok then return binding end
+    return S.CallRepository.WithLease(characterId,generationId,function(tx,v,slot,checkedBinding)
+        local binding=checkedBinding; if not binding.ok then return binding end
         local b=binding.value
         if type(evidence)~='table' or evidence.observerId~=b.observerId or evidence.netId~=b.netId
             or evidence.generationId~=generationId or evidence.disappeared~=true then
@@ -92,6 +108,7 @@ function L.FinishCleanup(characterId,generationId,evidence)
         end
         if v.state=='released' and v.revision==4 then return S.Ok(v) end
         if v.state~='cleanup_pending' then return S.Err('cleanup_not_pending','Persist cleanup intent before releasing.') end
+        local projection=S.HorseProjection.Store(tx,v,'observed_cleanup'); if not projection.ok then return projection end
         if tx.exec("UPDATE fs_call_bindings SET state='cleared',revision=2 WHERE generation_id=? AND state='cleanup_pending' AND revision=1",
             generationId)~=1 then return S.Err('revision_conflict','Binding changed during cleanup.') end
         local advanced=Advance(tx,v,'released'); if not advanced.ok then return advanced end
@@ -105,8 +122,8 @@ function L.Reconcile(characterId,generationId,reason)
     if not ({restart_lost_observation=true,identity_lost=true,submission_unknown=true,cleanup_unknown=true})[reason] then
         return S.Err('invalid_input','Bounded reconciliation reason required.')
     end
-    return S.CallRepository.WithLease(characterId,generationId,function(tx,v)
-        local binding=L.ValidateState(tx,v); if not binding.ok then return binding end
+    return S.CallRepository.WithLease(characterId,generationId,function(tx,v,slot,checkedBinding)
+        local binding=checkedBinding; if not binding.ok then return binding end
         if v.state=='reconciliation_required' then return S.Ok(v) end
         if v.state~='submitting' and v.state~='active' and v.state~='cleanup_pending' then
             return S.Err('call_reconciliation_required','Only unresolved submitted generations can be fenced.')
@@ -122,8 +139,10 @@ end
 
 -- Immutable process evidence is committed after the single-use submission
 -- claim and before any native instruction. Failure retains the submitted fence.
-function L.ProcessEvidence(tx,lease)
-    local row=tx.one('SELECT * FROM fs_call_process_epochs WHERE generation_id=?',lease.generationId)
+function L.ProcessEvidence(tx,lease,prefetched)
+    local row
+    if prefetched then row=prefetched[1]
+    else row=tx.one('SELECT * FROM fs_call_process_epochs WHERE generation_id=?',lease.generationId) end
     if not row then return S.Ok({recorded=false}) end
     if row.generation_id~=lease.generationId or not S.Operations.IsUuid(row.process_epoch) or row.process_epoch~=row.process_epoch:lower()
         or lease.state=='prepared' or (lease.state=='released' and lease.revision==1) then
@@ -133,7 +152,7 @@ function L.ProcessEvidence(tx,lease)
 end
 function L.RecordProcessEpoch(context,generationId,epoch)
     if not S.Operations.IsUuid(epoch) then return S.Err('invalid_input','Server process UUID required.') end
-    return S.CallRepository.WithLease(context.characterId,generationId,function(tx,v)
+    return S.CallRepository.WithLease(context.characterId,generationId,function(tx,v,slot,checkedBinding)
         if v.state~='submitting' or v.sessionId~=context.sessionId or v.source~=context.source then
             return S.Err('submission_conflict','Only the original submitted generation may record process evidence.')
         end
@@ -189,8 +208,8 @@ function L.ResolveProcessEnded(characterId,generationId,currentEpoch)
     end
     characterId,generationId=characterId:lower(),generationId:lower()
     if not CanonicalUuid(currentEpoch) then return S.Err('invalid_input','Current server process UUID required.') end
-    return S.CallRepository.WithLease(characterId,generationId,function(tx,v)
-        local binding=L.ValidateState(tx,v); if not binding.ok then return binding end
+    return S.CallRepository.WithLease(characterId,generationId,function(tx,v,slot,checkedBinding)
+        local binding=checkedBinding; if not binding.ok then return binding end
         local function View(replayed,recovery)
             return S.Ok({characterId=v.characterId,generationId=v.generationId,horseId=v.horseId,
                 state='released',revision=5,replayed=replayed,recovery=S.Copy(recovery),entityMutation=false})
@@ -206,6 +225,9 @@ function L.ResolveProcessEnded(characterId,generationId,currentEpoch)
             return S.Err('process_still_current','Original process is still current; slot retained.')
         end
         if not EpochCurrent(currentEpoch) then return S.Err('process_identity_lost','Current process identity changed.') end
+        if not binding.value.unbound then
+            local projection=S.HorseProjection.Store(tx,v,'process_ended'); if not projection.ok then return projection end
+        end
         local priorRevision=v.revision
         if tx.exec([[INSERT INTO fs_call_recoveries
             (generation_id,original_epoch,resolved_epoch,prior_revision,prior_reason) VALUES (?,?,?,?,?)]],

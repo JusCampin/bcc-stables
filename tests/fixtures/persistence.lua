@@ -3,6 +3,8 @@ local function fixture()
     local m = { db = { tables = {}, ledger = {}, characters = {}, operations = {}, horses = {}, history = {}, outbox = {}, registrations = {} },
         ready = true, provider = 'started', ddl = 0, clock = 0, outputs = {} }
     m.db.callLeases,m.db.callSlots,m.db.callBindings,m.db.callEpochs,m.db.callRecoveries={},{},{},{},{}
+    m.db.runtimeEvents={}
+    m.db.indexes={}
     local env = setmetatable({}, { __index = _G })
     env.GetResourceState = function() return m.provider end
     env.RegisterCommand = function() end
@@ -27,6 +29,19 @@ local function fixture()
         elseif sql:find("SELECT COUNT(*) FROM fs_call_bindings WHERE state<>'cleared'",1,true) then
             local n=0; for _,row in pairs(db.callBindings) do if row.state~='cleared' then n=n+1 end end
             return n
+        elseif sql:find('SELECT * FROM fs_horse_runtime_events',1,true) then
+            local latest; for _,r in pairs(db.runtimeEvents) do if r.horse_id==p[1] and (not latest or r.revision>latest.revision) then latest=r end end
+            return copy(latest)
+        elseif sql:find('INSERT INTO fs_horse_runtime_events',1,true) then
+            if m.failRuntimeEvent then error({code='WRITE_FAILED',outcome='rolled_back'}) end
+            assert(m.inTx and m.locked==db.horses[p[2]].owner_character_id and not db.runtimeEvents[p[1]])
+            for _,r in pairs(db.runtimeEvents) do assert(not (r.horse_id==p[2] and r.revision==p[7])) end
+            db.runtimeEvents[p[1]]={event_id=p[1],horse_id=p[2],generation_id=p[3],from_availability=p[4],to_availability=p[5],prior_revision=p[6],revision=p[7],reason=p[8]}; return 1
+        elseif sql:find('UPDATE fs_horses SET availability=?',1,true) then
+            local r=db.horses[p[2]]
+            assert(m.inTx and m.locked==p[3])
+            if m.failProjectionCas or not r or r.owner_character_id~=p[3] or r.availability~=p[4] or r.revision~=p[5] then return 0 end
+            r.availability,r.revision=p[1],r.revision+1; return 1
         elseif sql:find('SELECT * FROM fs_call_recoveries',1,true) then return copy(db.callRecoveries[p[1]])
         elseif sql:find('INSERT INTO fs_call_recoveries',1,true) then
             if m.failRecoveryInsert then error({code='WRITE_FAILED',outcome='rolled_back'}) end
@@ -66,6 +81,8 @@ local function fixture()
         elseif sql:find('SELECT * FROM fs_call_slots',1,true) then return copy(db.callSlots[p[1]])
         elseif sql:find('SELECT * FROM fs_call_leases',1,true) then
             local row=db.callLeases[p[1]]; return row and row.character_id==p[2] and copy(row) or nil
+        elseif sql:find("SELECT generation_id FROM fs_call_leases WHERE horse_id=? AND state<>'released'",1,true) then
+            for _,row in pairs(db.callLeases) do if row.horse_id==p[1] and row.state~='released' then return {generation_id=row.generation_id} end end
         elseif sql:find('SELECT generation_id FROM fs_call_leases',1,true) then
             for _,row in pairs(db.callLeases) do if row.state~='released' and (row.character_id==p[1] or (p[2] and row.horse_id==p[2])) then return {generation_id=row.generation_id} end end
         elseif sql:find('INSERT INTO fs_call_leases',1,true) then
@@ -94,6 +111,15 @@ local function fixture()
             local row=db.callSlots[p[1]]
             if m.failCallDelete or not row or row.generation_id~=p[2] then return 0 end
             db.callSlots[p[1]]=nil; return 1
+        elseif sql:find('information_schema.STATISTICS',1,true) then return copy(db.indexes[p[1]..'.'..p[2]] or {})
+        elseif sql:find('ALTER TABLE',1,true) then
+            if m.failIndex then error({code='DDL_FAILED',outcome='not_executed'}) end
+            local target,name=sql:match('ALTER TABLE `([a-z_]+)` ADD INDEX `([a-z_]+)`')
+            assert(target and name and not db.indexes[target..'.'..name])
+            db.indexes[target..'.'..name]={
+                {COLUMN_NAME='horse_id',SEQ_IN_INDEX=1,NON_UNIQUE=1,INDEX_TYPE='BTREE',COLLATION='A'},
+                {COLUMN_NAME='state',SEQ_IN_INDEX=2,NON_UNIQUE=1,INDEX_TYPE='BTREE',COLLATION='A'}}
+            m.indexDdl=(m.indexDdl or 0)+1; return 0
         elseif sql:find('CREATE TABLE', 1, true) then
             local name = assert(sql:match('CREATE TABLE IF NOT EXISTS `([a-z_]+)`'))
             if m.failCreate == name then error({code='DDL_FAILED',outcome='not_executed'}) end
@@ -237,6 +263,19 @@ local function fixture()
         elseif sql:find('SELECT * FROM fs_horses WHERE horse_id=',1,true) then
             local h=db.horses[p[1]]
             return h and h.owner_character_id==p[2] and copy(h) or nil
+        elseif sql:find('FROM fs_horses AS horse',1,true) then
+            local joined
+            for _,horse in pairs(db.horses) do if horse.origin_operation_id==p[3] then joined=copy(horse); break end end
+            if not joined then return nil end
+            for _,r in pairs(db.history) do if r[3]==p[3] and r[4]==p[1] then
+                joined.purchase_event_id,joined.purchase_horse_id,joined.purchase_operation_id=r[1],r[2],r[3]
+                joined.purchase_kind,joined.purchase_facts_json=r[4],r[5]
+            end end
+            for _,r in pairs(db.outbox) do if r[2]==p[3] and r[3]==p[2] then
+                joined.purchase_outbox_id,joined.purchase_outbox_operation_id=r[1],r[2]
+                joined.purchase_outbox_name,joined.purchase_outbox_json,joined.purchase_outbox_delivered=r[3],r[4],r.delivered or 0
+            end end
+            return joined
         elseif sql:find('SELECT * FROM fs_horses WHERE origin_operation_id=',1,true) then
             for _,horse in pairs(db.horses) do if horse.origin_operation_id==p[1] then return copy(horse) end end
         elseif sql:find('SELECT * FROM fs_horse_history WHERE operation_id=',1,true) then
@@ -271,10 +310,23 @@ local function fixture()
             return execute(method,sql,...)
         end
     end
+    env.DB.stmt=function(sql,...) return {sql=sql,params=table.pack(...)} end
     env.DB.transaction = function(body)
         local snapshot, tx = copy(m.db), {}
         m.inTx,m.locked = true,nil
         for _,method in ipairs({'exec','query','one','value'}) do tx[method] = function(sql,...) return execute(method,sql,...) end end
+        tx.batch=function(statements)
+            local rows={}
+            for index,statement in ipairs(statements) do
+                if statement.sql:match('^%s*INSERT') or statement.sql:match('^%s*UPDATE') then
+                    rows[index]={affectedRows=tx.exec(statement.sql,table.unpack(statement.params,1,statement.params.n))}
+                else
+                    local row=tx.one(statement.sql,table.unpack(statement.params,1,statement.params.n))
+                    rows[index]=row and {row} or {}
+                end
+            end
+            return rows
+        end
         local ok, committed = pcall(body,tx)
         m.inTx,m.locked = false,nil
         if not ok or committed ~= true then m.db = snapshot end

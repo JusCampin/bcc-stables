@@ -81,8 +81,10 @@ local function fixture(overrides)
         RequireReady = function() return env.Stables.Ok({ state = 'ready' }) end,
         Stop = function() end,
     }
+    env.Stables.OwnedSnapshot={Start=function() return env.Stables.Ok({ok=true,mode='single_statement'}) end,
+        RequireReady=function() return env.Stables.Ok(true) end,Stop=function() end}
     env.Stables.NativeCalls={Start=function() return env.Stables.Ok({ok=true,enabled=false,entitySpawning=false}) end,
-        Install=function() return env.Stables.Ok({routes=5}) end,Run=function() end,Stop=function() end,SessionEvent=function() end}
+        Install=function() return env.Stables.Ok({routes=8}) end,Run=function() end,Stop=function() end,SessionEvent=function() end}
     mock.start = function() return env.Stables.Foundation.Start() end
     return mock
 end
@@ -280,7 +282,7 @@ end)
 test('catalogue startup adds only a bounded read route and capability',function()
     local m=fixture(); assert(m.start().ok)
     local health=m.stables.Foundation.Health().value
-    assert(health.checks.catalog.entries==1 and health.checks.registrations.routes==27)
+    assert(health.checks.catalog.entries==1 and health.checks.registrations.routes==30)
     assert(m.routes['stables.catalog.get.v1'].options.requireCharacter)
     assert(m.stables.Foundation.Capabilities().value.features.catalogRead==1)
 end)
@@ -310,6 +312,12 @@ test('foundation stop and provider failure stop live native observer',function()
     assert(m.start().ok); m.stables.Foundation.Stop(); assert(stops==1)
     m=fixture(); stops=0; m.stables.NativeCalls.Stop=function() stops=stops+1 end
     assert(m.start().ok); m.stables.Foundation.AssetsStopped(); assert(stops==1)
+end)
+
+
+test('snapshot readiness refusal prevents route registration after persistence',function()
+    local m=fixture(); m.stables.OwnedSnapshot.Start=function() return m.stables.Err('snapshot_environment_unsupported','Unsupported isolation.') end
+    assert(m.start().code=='snapshot_environment_unsupported' and next(m.routes)==nil)
 end)
 
 print(('%d/%d offline cases passed; runtime entry points parse under Lua 5.4.'):format(passed, passed))

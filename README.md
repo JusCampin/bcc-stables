@@ -12,14 +12,23 @@ observers. It performs no entity lookup or deletion. Released revision 5 disting
 process-end recovery from ordinary observed cleanup. See
 [native recovery](../../feather-scripts/gameplay-resource-docs/bcc-stables/NATIVE_RECOVERY.md).
 
-Registrations now include twenty-seven RPC routes and three session subscriptions.
+Registrations now include thirty RPC routes and three session subscriptions.
 Purchase, proof, selection and call switches default off; controlled server tests
 retain selection/call/native switches enabled. Purchase UI and riding/follow/tack
-remain unavailable. Offline suite: 612/612 cases.
+remain unavailable. Offline suite: 777/777 cases.
 
 Selected-horse call/current store controls use Core RPC; controlled call/bind,
 store/pending/disappearance and repeated empty store passed live. Use `BccStablesHorseCall` and `BccStablesHorseStore` without IDs.
 See [call controls](../../feather-scripts/gameplay-resource-docs/bcc-stables/HORSE_CALL_CONTROLS.md).
+
+Schema 7 adds revisioned stored/active projections tied atomically to lifecycle
+receipts. Current owned/fulfillment reads show availability and projectionRevision;
+schema-7 checks and the controlled active/stored revision cycle 1/2/3/4 passed live. See
+[runtime projection](../../feather-scripts/gameplay-resource-docs/bcc-stables/HORSE_RUNTIME_PROJECTION.md).
+
+Diagnostic [call-stage timings](../../feather-scripts/gameplay-resource-docs/bcc-stables/CALL_TIMING.md)
+are implemented to investigate reported spawn latency; first live measurements are pending.
+No loading/authorization/grounding behavior has been tuned from an unmeasured estimate.
 
 See the authoritative [master plan](../../feather-scripts/gameplay-resource-docs/bcc-stables/BCC_STABLES_MASTER_PLAN.md),
 [owned horse reads](../../feather-scripts/gameplay-resource-docs/bcc-stables/OWNED_HORSE_READS.md),
@@ -426,3 +435,34 @@ with an empty call slot between gates. See the native calls document.
 Console-only BccStablesNative drain now supports controlled pre-restart cleanup
 and blocks dispatch until restart, preserving selection/configuration. Live
 acceptance is pending; arbitrary restart/crash reconciliation remains separate.
+
+
+Console-only latency baseline: `BccStablesNative latency_probe <horseAssetId>`
+performs three cached-readiness calls without SQL, three plain SELECT 1 calls,
+three SELECT 1 statements in one read-only
+workload transaction, and three direct Assets horse reads. It reports per-sample
+and min/median/max elapsed milliseconds, plus transaction begin/finish/total.
+No horse, purchase, item or funds are changed; no arbitrary SQL is accepted.
+This measures transport/provider/database/scheduling together, not isolated SQL
+execution. Current Assets reads and lifecycle authorization remain required.
+
+
+Runtime projection reads require feather-mysql's additive tx.batch support:
+update its DB consumer library, validator, Lua dispatcher and JS bridge/driver
+together, then fully restart the server. The latency probe now also reports
+batchedTransaction for three independent read statements through one bridge call.
+No callback scheduling, schema, gameplay gate or ownership-cache change is made.
+
+
+Schema 8 adds the managed horse/state call index. Owned evidence uses a validated
+single-statement InnoDB snapshot; startup checks isolation/readiness and preserves
+fresh canonical Assets authorization. Coordinated MariaDB commit/rollback and
+recovery-shaped snapshot proof passed. See the authoritative
+[architecture review](../../feather-scripts/gameplay-resource-docs/bcc-stables/SPAWN_ARCHITECTURE_REVIEW.md).
+
+Controlled native proofs cover movement/mount/dismount, companion association,
+owner whistle approach with BCC Horses arrival settings, local control reacquisition,
+and one-use server-validated delegation to the current simulator. Store during a
+delegated approach passed with disappearance and reference/current-slot cleanup.
+Continuous follow, leading, mounted-storage policy and distant relocation remain
+unimplemented. See [whistle relay](../../feather-scripts/gameplay-resource-docs/bcc-stables/NATIVE_WHISTLE_RELAY.md).

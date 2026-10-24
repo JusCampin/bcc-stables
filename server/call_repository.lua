@@ -32,7 +32,9 @@ local function Decode(row, characterId)
         revision = tonumber(row.revision)
     })
 end
-local function Transaction(characterId, body)
+-- Shared row decoder for bounded current-projection validation; no exports/auth grant.
+function R.ValidateSaved(row,characterId) return Decode(row,characterId) end
+local function Transaction(characterId, body, missingCode)
     local ready = S.Foundation.RequireReady(); if not ready.ok then return ready end
     local result
     local ok, committed = pcall(DB.transaction, function(tx)
@@ -40,7 +42,8 @@ local function Transaction(characterId, body)
         'SELECT character_id,selected_horse_id,revision FROM fs_character_stables WHERE character_id=? FOR UPDATE',
             characterId)
         if not stable then
-            result = S.Err('selection_required', 'Select an owned horse first.'); return false
+            result = missingCode and S.Err(missingCode,'Call generation was not found.')
+                or S.Err('selection_required', 'Select an owned horse first.'); return false
         end
         result = body(tx, stable); return result.ok == true
     end)
@@ -84,70 +87,85 @@ function R.Get(characterId, generationId)
     return ok and result or S.Persistence.DatabaseError(result)
 end
 
-local function ValidateProjection(tx, context, horse)
-    local record = S.Repository.ValidateSnapshot(tx.one(
-    'SELECT * FROM fs_operations WHERE operation_id=? AND character_id=? FOR UPDATE', horse.operationId,
-        context.characterId))
+local function ValidateProjection(tx, context, horse, prefetched)
+    -- Known keys, same transaction and lock order. Validate every bounded row
+    -- before writes; batching only removes repeated bridge round trips.
+    local rows=prefetched or tx.batch({
+        DB.stmt('SELECT * FROM fs_operations WHERE operation_id=? AND character_id=? FOR UPDATE',horse.operationId,context.characterId),
+        DB.stmt('SELECT * FROM fs_asset_registrations WHERE operation_id=? FOR UPDATE',horse.operationId),
+        DB.stmt('SELECT * FROM fs_horses WHERE horse_id=? AND owner_character_id=? FOR UPDATE',horse.horseId,context.characterId)
+    })
+    if type(rows)~='table' or #rows~=3 then return S.Err('invalid_call','Invalid call projection snapshot.') end
+    for i=1,3 do
+        if type(rows[i])~='table' or #rows[i]>1 then return S.Err('invalid_call','Invalid call projection rows.') end
+    end
+    local record = S.Repository.ValidateSnapshot(rows[1][1])
     if not record.ok then return record end
     if record.value.state ~= 'fulfilled' or record.value.terms.horseId ~= horse.horseId then return S.Err(
         'invalid_call', 'Fulfilled owned horse required.') end
-    local row = tx.one('SELECT * FROM fs_asset_registrations WHERE operation_id=? FOR UPDATE', horse.operationId)
+    local row = rows[2][1]
     local link = S.AssetRegistration.ValidateSaved(row, record.value, row and row.model_key)
     if not link.ok or link.value.state ~= 'linked' or link.value.assetId ~= horse.assetId
         or link.value.request.modelKey ~= horse.modelKey or horse.assetRevision < link.value.assetRevision then
         return S.Err('invalid_call', 'Canonical horse link changed.')
     end
-    local projection = tx.one('SELECT * FROM fs_horses WHERE horse_id=? AND owner_character_id=? FOR UPDATE',
-        horse.horseId, context.characterId)
+    local projection = rows[3][1]
     if not projection or projection.origin_operation_id ~= horse.operationId or projection.availability ~= 'stored' or projection.biological_state ~= 'alive' then
         return S.Err('horse_not_found', 'An owned stored horse is required.')
     end
     return S.Ok(true)
 end
 
-function R.Prepare(context, horse, selectionRevision, generationId)
-    return Transaction(context.characterId, function(tx, stable)
-        if stable.selected_horse_id ~= horse.horseId or tonumber(stable.revision) ~= selectionRevision then
-            return S.Err('revision_conflict', 'Horse selection changed before call admission.')
+local function PrepareLocked(tx,stable,context,horse,selectionRevision,generationId)
+    if stable.selected_horse_id ~= horse.horseId or tonumber(stable.revision) ~= selectionRevision then
+        return S.Err('revision_conflict', 'Horse selection changed before call admission.')
+    end
+    local slot = tx.one('SELECT * FROM fs_call_slots WHERE character_id=? FOR UPDATE', context.characterId)
+    if slot then
+        local lease = Decode(
+        tx.one('SELECT * FROM fs_call_leases WHERE generation_id=? AND character_id=? FOR UPDATE', slot
+        .generation_id, context.characterId), context.characterId)
+        if not lease.ok then return lease end
+        if S.CallLifecycleRepository then
+            local binding=S.CallLifecycleRepository.ValidateState(tx,lease.value)
+            if not binding.ok then return binding end
         end
-        local slot = tx.one('SELECT * FROM fs_call_slots WHERE character_id=? FOR UPDATE', context.characterId)
-        if slot then
-            local lease = Decode(
-            tx.one('SELECT * FROM fs_call_leases WHERE generation_id=? AND character_id=? FOR UPDATE', slot
-            .generation_id, context.characterId), context.characterId)
-            if not lease.ok then return lease end
-            if S.CallLifecycleRepository then
-                local binding=S.CallLifecycleRepository.ValidateState(tx,lease.value)
-                if not binding.ok then return binding end
-            end
-            if lease.value.state == 'released' or slot.horse_id ~= lease.value.horseId then return S.Err('invalid_call',
-                    'Runtime slot requires reconciliation.') end
-            if lease.value.sessionId ~= context.sessionId or lease.value.source ~= context.source then
-                return S.Err('call_recovery_required',
-                    'Previous-session call must be inspected/aborted before another call.')
-            end
-            if lease.value.state ~= 'prepared' then return S.Err('call_cleanup_required',
-                    'Submission has been claimed; entity recovery must finish before another call.') end
-            if lease.value.horseId ~= horse.horseId then return S.Err('horse_busy',
-                    'A different call occupies the character slot.') end
-            return lease
+        if lease.value.state == 'released' or slot.horse_id ~= lease.value.horseId then return S.Err('invalid_call',
+                'Runtime slot requires reconciliation.') end
+        if lease.value.sessionId ~= context.sessionId or lease.value.source ~= context.source then
+            return S.Err('call_recovery_required',
+                'Previous-session call must be inspected/aborted before another call.')
         end
-        if tx.one("SELECT generation_id FROM fs_call_leases WHERE (character_id=? OR horse_id=?) AND state<>'released' LIMIT 1 FOR UPDATE",context.characterId,horse.horseId) then
-            return S.Err('invalid_call','An unreleased generation requires reconciliation before another call.')
-        end
-        local valid = ValidateProjection(tx, context, horse); if not valid.ok then return valid end
-        if tx.exec([[INSERT INTO fs_call_leases
+        if lease.value.state ~= 'prepared' then return S.Err('call_cleanup_required',
+                'Submission has been claimed; entity recovery must finish before another call.') end
+        if lease.value.horseId ~= horse.horseId then return S.Err('horse_busy',
+                'A different call occupies the character slot.') end
+        return lease
+    end
+    if tx.one("SELECT generation_id FROM fs_call_leases WHERE (character_id=? OR horse_id=?) AND state<>'released' LIMIT 1 FOR UPDATE",context.characterId,horse.horseId) then
+        return S.Err('invalid_call','An unreleased generation requires reconciliation before another call.')
+    end
+    local valid = ValidateProjection(tx, context, horse); if not valid.ok then return valid end
+    -- All admission checks completed above. Execute in order on this same
+    -- transaction; validate both write headers and saved row before commit.
+    local saved=tx.batch({
+        DB.stmt([[INSERT INTO fs_call_leases
             (generation_id,character_id,horse_id,operation_id,asset_id,model_key,session_id,source_id,selection_revision)
-            VALUES (?,?,?,?,?,?,?,?,?)]], generationId, context.characterId, horse.horseId, horse.operationId, horse.assetId, horse.modelKey,
-                context.sessionId, context.source, selectionRevision) ~= 1 then
-            return S.Err('call_not_saved', 'Generation was not saved.')
-        end
-        if tx.exec('INSERT INTO fs_call_slots (character_id,horse_id,generation_id) VALUES (?,?,?)', context.characterId, horse.horseId, generationId) ~= 1 then
-            return S.Err('call_not_saved', 'Runtime slot was not saved.')
-        end
-        return Decode(
-        tx.one('SELECT * FROM fs_call_leases WHERE generation_id=? AND character_id=?', generationId, context
-        .characterId), context.characterId)
+            VALUES (?,?,?,?,?,?,?,?,?)]],generationId,context.characterId,horse.horseId,horse.operationId,
+            horse.assetId,horse.modelKey,context.sessionId,context.source,selectionRevision),
+        DB.stmt('INSERT INTO fs_call_slots (character_id,horse_id,generation_id) VALUES (?,?,?)',context.characterId,horse.horseId,generationId),
+        DB.stmt('SELECT * FROM fs_call_leases WHERE generation_id=? AND character_id=?',generationId,context.characterId)
+    })
+    if type(saved)~='table' or #saved~=3 or type(saved[1])~='table' or saved[1].affectedRows~=1
+        or type(saved[2])~='table' or saved[2].affectedRows~=1
+        or type(saved[3])~='table' or #saved[3]~=1 then
+        return S.Err('call_not_saved','Generation and runtime slot must both be saved.')
+    end
+    return Decode(saved[3][1],context.characterId)
+end
+function R.Prepare(context,horse,selectionRevision,generationId)
+    return Transaction(context.characterId,function(tx,stable)
+        return PrepareLocked(tx,stable,context,horse,selectionRevision,generationId)
     end)
 end
 
@@ -177,44 +195,101 @@ function R.Abort(characterId, generationId)
 end
 
 
+local function LifecycleRows(tx,characterId,generationId,horse)
+    -- Known keys, original statement order, same transaction/locks.
+    local statements={
+        DB.stmt('SELECT * FROM fs_call_slots WHERE character_id=? FOR UPDATE',characterId),
+        DB.stmt('SELECT * FROM fs_call_leases WHERE generation_id=? AND character_id=? FOR UPDATE',generationId,characterId),
+        DB.stmt('SELECT * FROM fs_call_bindings WHERE generation_id=?',generationId)
+    }
+    if horse then
+        statements[#statements+1]=DB.stmt('SELECT * FROM fs_operations WHERE operation_id=? AND character_id=? FOR UPDATE',horse.operationId,characterId)
+        statements[#statements+1]=DB.stmt('SELECT * FROM fs_asset_registrations WHERE operation_id=? FOR UPDATE',horse.operationId)
+        statements[#statements+1]=DB.stmt('SELECT * FROM fs_horses WHERE horse_id=? AND owner_character_id=? FOR UPDATE',horse.horseId,characterId)
+        statements[#statements+1]=DB.stmt('SELECT * FROM fs_call_process_epochs WHERE generation_id=?',generationId)
+    end
+    local rows=tx.batch(statements)
+    if type(rows)~='table' or #rows~=#statements then return S.Err('invalid_call','Invalid lifecycle snapshot.') end
+    for i=1,#statements do
+        if type(rows[i])~='table' or #rows[i]>1 then return S.Err('invalid_call','Invalid lifecycle rows.') end
+    end
+    return S.Ok(rows)
+end
+
 -- The winner alone may dispatch a native instruction in a future coordinator.
 -- A replay/unknown commit MUST NOT produce a second instruction or free the slot.
-function R.ClaimSubmission(context, horse, generationId)
-    return Transaction(context.characterId, function(tx, stable)
-        local slot = tx.one('SELECT * FROM fs_call_slots WHERE character_id=? FOR UPDATE', context.characterId)
-        local lease = Decode(tx.one(
-            'SELECT * FROM fs_call_leases WHERE generation_id=? AND character_id=? FOR UPDATE',
-            generationId, context.characterId), context.characterId)
-        if not lease.ok then return lease end
-        local v = lease.value
-        if S.CallLifecycleRepository then
-            local binding=S.CallLifecycleRepository.ValidateState(tx,v)
-            if not binding.ok then return binding end
+local function ClaimLocked(tx,stable,context,horse,generationId,processEpoch)
+    local snapshot=LifecycleRows(tx,context.characterId,generationId,processEpoch and horse or nil); if not snapshot.ok then return snapshot end
+    local rows=snapshot.value
+    local slot=rows[1][1]
+    local lease=Decode(rows[2][1],context.characterId)
+    if not lease.ok then return lease end
+    local v = lease.value
+    if S.CallLifecycleRepository then
+        local binding=S.CallLifecycleRepository.ValidateSavedState(tx,v,rows[3][1])
+        if not binding.ok then return binding end
+    end
+    if v.sessionId ~= context.sessionId or v.source ~= context.source then
+        return S.Err('call_recovery_required', 'Submission requires the original current session.')
+    end
+    if v.state ~= 'prepared' then return S.Err('submission_conflict', 'Submission was already claimed or released.') end
+    if not slot or slot.generation_id ~= generationId or slot.horse_id ~= v.horseId then
+        return S.Err('invalid_call', 'Submission slot requires reconciliation.')
+    end
+    if stable.selected_horse_id ~= v.horseId or tonumber(stable.revision) ~= v.selectionRevision then
+        return S.Err('revision_conflict', 'Selection changed before submission.')
+    end
+    if horse.horseId ~= v.horseId or horse.operationId ~= v.operationId or horse.assetId ~= v.assetId
+        or horse.modelKey ~= v.modelKey then
+        return S.Err('asset_changed', 'Observed horse does not match the prepared generation.')
+    end
+    local valid = ValidateProjection(tx, context, horse,processEpoch and {rows[4],rows[5],rows[6]} or nil); if not valid.ok then return valid end
+    if processEpoch then
+        local evidence=S.CallLifecycleRepository.ProcessEvidence(tx,v,rows[7])
+        if not evidence.ok then return evidence end
+    end
+    local update="UPDATE fs_call_leases SET state='submitting',revision=1 WHERE generation_id=? AND character_id=? AND state='prepared' AND revision=0"
+    if processEpoch then
+        local writes=tx.batch({
+            DB.stmt(update,generationId,context.characterId),
+            DB.stmt('INSERT INTO fs_call_process_epochs (generation_id,process_epoch) VALUES (?,?)',generationId,processEpoch)
+        })
+        if type(writes)~='table' or #writes~=2 or type(writes[1])~='table' or writes[1].affectedRows~=1 then
+            return S.Err('revision_conflict','Submission claim changed; no native instruction is authorized.')
         end
-        if v.sessionId ~= context.sessionId or v.source ~= context.source then
-            return S.Err('call_recovery_required', 'Submission requires the original current session.')
+        if type(writes[2])~='table' or writes[2].affectedRows~=1 then
+            return S.Err('process_epoch_not_saved','Process evidence was not committed with claim.')
         end
-        if v.state ~= 'prepared' then return S.Err('submission_conflict', 'Submission was already claimed or released.') end
-        if not slot or slot.generation_id ~= generationId or slot.horse_id ~= v.horseId then
-            return S.Err('invalid_call', 'Submission slot requires reconciliation.')
-        end
-        if stable.selected_horse_id ~= v.horseId or tonumber(stable.revision) ~= v.selectionRevision then
-            return S.Err('revision_conflict', 'Selection changed before submission.')
-        end
-        if horse.horseId ~= v.horseId or horse.operationId ~= v.operationId or horse.assetId ~= v.assetId
-            or horse.modelKey ~= v.modelKey then
-            return S.Err('asset_changed', 'Observed horse does not match the prepared generation.')
-        end
-        local valid = ValidateProjection(tx, context, horse); if not valid.ok then return valid end
-        if tx.exec("UPDATE fs_call_leases SET state='submitting',revision=1 WHERE generation_id=? AND character_id=? AND state='prepared' AND revision=0",
-            generationId, context.characterId) ~= 1 then
-            return S.Err('revision_conflict', 'Submission claim changed; no native instruction is authorized.')
-        end
-        v.state, v.revision = 'submitting', 1
-        return lease
+        v.processEpoch=processEpoch
+    elseif tx.exec(update,generationId,context.characterId)~=1 then
+        return S.Err('revision_conflict','Submission claim changed; no native instruction is authorized.')
+    end
+    v.state, v.revision = 'submitting', 1
+    return lease
+end
+function R.ClaimSubmission(context,horse,generationId,processEpoch)
+    if processEpoch~=nil and (not S.Operations.IsUuid(processEpoch) or processEpoch~=processEpoch:lower()) then
+        return S.Err('invalid_input','Canonical process UUID required.')
+    end
+    return Transaction(context.characterId,function(tx,stable)
+        return ClaimLocked(tx,stable,context,horse,generationId,processEpoch)
     end)
 end
 
+-- Normal one-shot call only: preparation, single-use claim and receipt share
+-- one commit. Explicit Prepare/Claim APIs keep their independent boundaries.
+function R.PrepareAndClaim(context,horse,selectionRevision,generationId,processEpoch)
+    if not S.Operations.IsUuid(generationId) or not S.Operations.IsUuid(processEpoch)
+        or processEpoch~=processEpoch:lower() then return S.Err('invalid_input','Generation/process UUIDs required.') end
+    return Transaction(context.characterId,function(tx,stable)
+        local prepared=PrepareLocked(tx,stable,context,horse,selectionRevision,generationId)
+        if not prepared.ok then return prepared end
+        if prepared.value.generationId~=generationId then
+            return S.Err('submission_conflict','Another preparation won the runtime slot.')
+        end
+        return ClaimLocked(tx,stable,context,horse,generationId,processEpoch)
+    end)
+end
 
 -- Internal transaction boundary for entity lifecycle persistence. No external
 -- calls/native operations may run in body while these SQL locks are held.
@@ -223,16 +298,20 @@ function R.WithLease(characterId, generationId, body)
         return S.Err('invalid_input','Character and generation UUIDs required.')
     end
     characterId,generationId=characterId:lower(),generationId:lower()
-    local previous=R.Get(characterId,generationId); if not previous.ok then return previous end
     return Transaction(characterId, function(tx)
-        local slot=tx.one('SELECT * FROM fs_call_slots WHERE character_id=? FOR UPDATE',characterId)
-        local lease=Decode(tx.one('SELECT * FROM fs_call_leases WHERE generation_id=? AND character_id=? FOR UPDATE',
-            generationId,characterId),characterId)
+        local snapshot=LifecycleRows(tx,characterId,generationId); if not snapshot.ok then return snapshot end
+        local rows=snapshot.value
+        local slot=rows[1][1]
+        local lease=Decode(rows[2][1],characterId)
         if not lease.ok then return lease end
         if lease.value.state~='released' and (not slot or slot.generation_id~=generationId
             or slot.horse_id~=lease.value.horseId) then
             return S.Err('invalid_call','Lifecycle slot requires reconciliation.')
         end
-        return body(tx,lease.value,slot)
-    end)
+        -- Validate the freshly locked lease, not a separate pre-transaction
+        -- snapshot. Every lifecycle callback receives a checked saved state.
+        local binding=S.CallLifecycleRepository.ValidateSavedState(tx,lease.value,rows[3][1])
+        if not binding.ok then return binding end
+        return body(tx,lease.value,slot,binding)
+    end,'call_not_found')
 end

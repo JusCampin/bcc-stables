@@ -5,6 +5,12 @@ local N,S=Stables.NativeCalls,Stables
 local records,enabled,running,draining={},false,false,false
 local MARKER='bccStablesGeneration'
 local OBSERVER='bccStablesObserver'
+local function Timing(pattern,...)
+    local args=table.pack(...)
+    -- Diagnostics cannot change a committed result or trigger entity cleanup.
+    pcall(function() print('[bcc-stables:timing] '..pattern:format(table.unpack(args,1,args.n))) end)
+end
+
 -- Runtime-only, non-replicated convar: survives this resource's restart and is
 -- intentionally never written to configuration/KVP. Reserve it for Stables.
 local PROCESS_KEY='bcc_stables_process_epoch_v1'
@@ -54,6 +60,10 @@ local function Identity(r)
 end
 local function Cancel(r)
     r.cancelled=true
+    if r.whistle then
+        TriggerClientEvent('bcc-stables:call:whistle_cancel',r.whistle.owner,{generationId=r.id,observerId=r.observerId,sequence=r.whistle.sequence})
+        r.whistle=nil
+    end
     TriggerClientEvent('bcc-stables:call:cancel',r.context.source,r.id)
 end
 local function Reconcile(r,reason)
@@ -127,7 +137,8 @@ local function Cleanup(r)
     if released.ok then records[r.id]=nil end
     return released
 end
-function N.Dispatch(p,source,context)
+local function Dispatch(p,source,context,handoff)
+    local dispatchStarted=GetGameTimer()
     if not Payload(p,false) then return S.Err('invalid_input','Only generationId is accepted.') end
     local checked=Check(source,context); if not checked.ok then return checked end
     if not enabled or not running then return S.Err('native_calls_disabled','Native calls are disabled.') end
@@ -136,7 +147,20 @@ function N.Dispatch(p,source,context)
     context=S.Copy(context); context.characterId=context.characterId:lower(); local id=p.generationId:lower()
     -- Resolve character-scoped durable ownership before consulting shared live
     -- observer state. A foreign caller must not learn whether this ID is active.
-    local saved=S.CallRepository.Get(context.characterId,id); if not saved.ok then return saved end
+    local readStarted=GetGameTimer()
+    local saved
+    if handoff then
+        local lease=type(handoff)=='table' and handoff.lease
+        -- claim is a local Lua capability, never a cross-resource function ref.
+        if type(lease)~='table' or type(handoff.claim)~='function' or lease.generationId~=id
+            or lease.characterId~=context.characterId or lease.sessionId~=context.sessionId or lease.source~=source
+            or not S.Operations.IsUuid(handoff.observerId) then return S.Err('call_not_found','Invalid prepared handoff.') end
+        saved=S.Ok(lease)
+    else
+        saved=S.CallRepository.Get(context.characterId,id)
+    end
+    if not saved.ok then return saved end
+    local timing={scopedReadMs=GetGameTimer()-readStarted,claimStages={}}
     checked=Check(source,context); if not checked.ok then return checked end
     if draining then return S.Err('native_calls_draining','Native dispatch is drained until resource restart.') end
     if records[id] then return S.Err('submission_conflict','Generation already has a live observer.') end
@@ -148,15 +172,33 @@ function N.Dispatch(p,source,context)
         started=GetGameTimer(),busy=true,phase='authorizing'}
     records[id]=r
     local ok,result=pcall(function()
-        local observer=DB.value('SELECT UUID()')
+        local uuidStarted=GetGameTimer()
+        local observer
+        if handoff then observer=handoff.observerId else observer=DB.value('SELECT UUID()') end
+        timing.observerUuidMs=GetGameTimer()-uuidStarted
         if not S.Operations.IsUuid(observer) then return S.Err('invalid_contract','Observer UUID required.') end
         r.observerId=observer:lower()
         if draining or r.cancelled or not running then return S.Err('native_calls_draining','Dispatch cancelled before submission.') end
+        local epochStarted=GetGameTimer()
         local epoch=N.ProcessEpoch(); if not epoch.ok then return epoch end
+        timing.processEpochMs=GetGameTimer()-epochStarted
         if draining or r.cancelled or not running then return S.Err('native_calls_draining','Dispatch cancelled before submission.') end
-        local claimed=S.Calls.ClaimSubmission({generationId=id},source,context)
+        local claimStarted=GetGameTimer()
+        local claimed
+        if handoff then claimed=handoff.claim(id,source,context,timing.claimStages,epoch.value.processEpoch)
+        else claimed=S.Calls.ClaimObservedSubmission({generationId=id},source,context,saved.value,timing.claimStages) end
+        timing.claimMs=GetGameTimer()-claimStarted
         if not claimed.ok then return claimed end
-        local recorded=S.CallLifecycleRepository.RecordProcessEpoch(context,id,epoch.value.processEpoch)
+        local receiptStarted=GetGameTimer()
+        local recorded
+        if handoff then
+            -- This internal claim committed its process receipt atomically.
+            recorded=claimed.value.processEpoch==epoch.value.processEpoch and S.Ok(true)
+                or S.Err('invalid_process_evidence','Atomic claim receipt is missing.')
+        else
+            recorded=S.CallLifecycleRepository.RecordProcessEpoch(context,id,epoch.value.processEpoch)
+        end
+        timing.processReceiptMs=GetGameTimer()-receiptStarted
         if not recorded.ok then return recorded end
         local unchanged=N.ProcessEpoch(); if not unchanged.ok then return unchanged end
         r.modelKey=claimed.value.modelKey
@@ -179,16 +221,31 @@ function N.Dispatch(p,source,context)
             records[id]=nil -- A durable unresolved slot still prevents another dispatch.
         end
     end
+    if result.ok then
+        Timing('dispatch generationId=%s scopedReadMs=%d observerUuidMs=%d processEpochMs=%d claimMs=%d processReceiptMs=%d totalMs=%d',
+            id,timing.scopedReadMs,timing.observerUuidMs,timing.processEpochMs,timing.claimMs,
+            timing.processReceiptMs,GetGameTimer()-dispatchStarted)
+        Timing('claim generationId=%s selectionMs=%d transactionMs=%d recheckMs=%d',
+            id,timing.claimStages.selectionMs,timing.claimStages.transactionMs,timing.claimStages.recheckMs)
+    end
     return result
+end
+function N.Dispatch(p,source,context) return Dispatch(p,source,context) end
+-- Internal prepared path only; not registered as an RPC/export.
+function N.DispatchPrepared(handoff,source,context)
+    if type(handoff)~='table' or type(handoff.lease)~='table' then return S.Err('invalid_input','Prepared handoff required.') end
+    return Dispatch({generationId=handoff.lease.generationId},source,context,handoff)
 end
 function N.Bind(p,source,context)
     if not Payload(p,true) then return S.Err('invalid_input','Exact generationId/netId required.') end
+    local bindStarted=GetGameTimer()
     local checked=Check(source,context); if not checked.ok then return checked end
     local r=records[p.generationId:lower()]
     if not r or r.context.source~=source or r.context.sessionId~=context.sessionId
         or r.context.characterId~=context.characterId:lower() then return S.Err('stale_call','No current native observer.') end
     if r.busy or r.phase~='waiting' or r.cancelled then return S.Err('binding_conflict','Binding is not available.') end
     r.busy=true
+    local timing={started=bindStarted,gatesMs=GetGameTimer()-bindStarted}
     local ok,result=pcall(function()
         local started=GetGameTimer(); local e
         repeat
@@ -197,13 +254,15 @@ function N.Bind(p,source,context)
             if r.cancelled or not running or GetGameTimer()-started>=5000 then return S.Err('entity_not_observed','New horse identity did not replicate.') end
             Wait(25)
         until false
+        timing.observationMs=GetGameTimer()-started
+        timing.validationStarted=GetGameTimer()
         if NetworkGetEntityOwner(e)~=source or NetworkGetNetworkIdFromEntity(e)~=p.netId then
             return S.Err('invalid_entity','Initial network identity/owner mismatch.')
         end
         checked=Check(source,context); if not checked.ok then return checked end
         local pos=Position(source); if not pos.ok then return pos end
         local lease=S.CallRepository.Get(context.characterId,r.id); if not lease.ok then return lease end
-        local owned=S.OwnedHorses.Get({horseId=lease.value.horseId},source,context)
+        local owned=S.OwnedHorses.GetKnown(lease.value.horseId,lease.value.operationId,source,context)
         if not owned.ok then return owned end
         checked=Check(source,context); if not checked.ok then return checked end
         if r.cancelled or not running or not Candidate(r,e) or GetPlayerRoutingBucket(source)~=0 then
@@ -211,20 +270,29 @@ function N.Bind(p,source,context)
         end
         r.entity,r.netId=e,p.netId
         Entity(e).state:set(MARKER,r.id,true); Entity(e).state:set(OBSERVER,r.observerId,true)
+        timing.validationMs=GetGameTimer()-timing.validationStarted
+        local commitStarted=GetGameTimer()
         local bound=S.CallLifecycleRepository.Bind(r.context,r.id,Identity(r))
+        timing.commitMs=GetGameTimer()-commitStarted
         if not bound.ok then return bound end
-        owned=S.OwnedHorses.Get({horseId=lease.value.horseId},source,context)
+        local recheckStarted=GetGameTimer()
+        owned=S.OwnedHorses.GetKnown(lease.value.horseId,lease.value.operationId,source,context)
         if not owned.ok then return owned end
         checked=Check(source,context)
         if not checked.ok or r.cancelled or GetPlayerRoutingBucket(source)~=0 or not Same(r) then
             return S.Err('stale_call','Bound generation requires cleanup.')
         end
+        timing.recheckMs=GetGameTimer()-recheckStarted
         r.phase,r.lastOwnerCheck='active',GetGameTimer()
         return S.Ok({generationId=r.id,state='active',netId=r.netId,gameplayAvailable=false})
     end)
     r.busy=false
     if not ok then result=S.Persistence.DatabaseError(result) end
-    if not result.ok then Cancel(r) end
+    if not result.ok then Cancel(r)
+    else
+        Timing('bind generationId=%s gatesMs=%d observationMs=%d validationMs=%d commitMs=%d recheckMs=%d totalMs=%d',
+            r.id,timing.gatesMs,timing.observationMs,timing.validationMs,timing.commitMs,timing.recheckMs,GetGameTimer()-timing.started)
+    end
     return result
 end
 function N.Store(p,source,context)
@@ -269,7 +337,7 @@ function N.Tick()
             if r.phase=='active' and not r.cancelled and GetGameTimer()-(r.lastOwnerCheck or 0)>=5000 then
                 r.lastOwnerCheck=GetGameTimer()
                 local lease=S.CallRepository.Get(r.context.characterId,r.id)
-                local owned=lease.ok and S.OwnedHorses.Get({horseId=lease.value.horseId},r.context.source,r.context)
+                local owned=lease.ok and S.OwnedHorses.GetKnown(lease.value.horseId,lease.value.operationId,r.context.source,r.context)
                 if not owned or not owned.ok then Cancel(r) end
             end
             if r.cancelled then Cleanup(r) end
@@ -307,15 +375,98 @@ function N.Start()
     enabled,running,draining=StablesConfig.nativeCalls,true,false
     return S.Ok({ok=true,enabled=enabled,entitySpawning=enabled,storeAvailable=enabled,gameplayAvailable=false})
 end
+-- Console-only read probe. Fixed sample counts, no arbitrary SQL or mutations.
+local probeBusy=false
+local function Samples(values)
+    local sorted={table.unpack(values)}; table.sort(sorted)
+    return {samplesMs=values,minMs=sorted[1],medianMs=sorted[2],maxMs=sorted[3]}
+end
+function N.LatencyProbe(assetId)
+    if not S.Operations.IsUuid(assetId) then return S.Err('invalid_input','Horse asset UUID required.') end
+    local ready=S.Foundation.RequireReady(); if not ready.ok then return ready end
+    if probeBusy then return S.Err('busy','A latency probe is already running.') end
+    probeBusy=true; assetId=assetId:lower()
+    local ok,result=pcall(function()
+        local bridge,direct,transaction,assets={},{},{},{}
+        -- ReadyV1 returns cached driver state through the same callback bridge;
+        -- unlike SELECT 1, this path does not acquire a connection or issue SQL.
+        for index=1,3 do
+            local began=GetGameTimer()
+            local ready=DB.isReady()
+            bridge[index]=GetGameTimer()-began
+            if ready~=true then return S.Err('dependency_unavailable','Database readiness bridge probe failed.') end
+        end
+        for index=1,3 do
+            local began=GetGameTimer()
+            local value=DB.value('SELECT 1')
+            direct[index]=GetGameTimer()-began
+            if tonumber(value)~=1 then return S.Err('invalid_contract','Database probe result must be one.') end
+        end
+        local transactionStarted=GetGameTimer()
+        local entered,leaving,valid
+        local committed=DB.transaction(function(tx)
+            entered=GetGameTimer(); valid=true
+            for index=1,3 do
+                local began=GetGameTimer()
+                local value=tx.value('SELECT 1')
+                transaction[index]=GetGameTimer()-began
+                if tonumber(value)~=1 then valid=false; return false end
+            end
+            leaving=GetGameTimer()
+            return true
+        end)
+        local transactionFinished=GetGameTimer()
+        if not valid then return S.Err('invalid_contract','Transaction probe result must be one.') end
+        if committed~=true then return S.Err('transaction_rolled_back','Read-only probe transaction did not complete.') end
+        local batchStarted=GetGameTimer()
+        local batchEntered,batchLeaving,batchCallMs,batchValid
+        local batchCommitted=DB.transaction(function(tx)
+            batchEntered=GetGameTimer()
+            local began=GetGameTimer()
+            local values=tx.batch({DB.stmt('SELECT 1 AS probe_value'),DB.stmt('SELECT 1 AS probe_value'),DB.stmt('SELECT 1 AS probe_value')})
+            batchCallMs=GetGameTimer()-began
+            batchValid=type(values)=='table' and #values==3
+            if batchValid then for index=1,3 do
+                local rows=values[index]
+                if type(rows)~='table' or #rows~=1 or tonumber(rows[1].probe_value)~=1 then batchValid=false; break end
+            end end
+            batchLeaving=GetGameTimer()
+            return batchValid
+        end)
+        local batchFinished=GetGameTimer()
+        if not batchValid then return S.Err('invalid_contract','Batch probe result must be three rows of one.') end
+        if batchCommitted~=true then return S.Err('transaction_rolled_back','Batch probe transaction did not complete.') end
+        for index=1,3 do
+            local began=GetGameTimer()
+            local read=S.Assets.ReadHorse(assetId)
+            assets[index]=GetGameTimer()-began
+            if not read.ok then return read end
+            if type(read.value)~='table' or read.value.assetId~=assetId or read.value.assetType~='horse' then
+                return S.Err('invalid_contract','Assets probe must return the requested horse.')
+            end
+        end
+        local tx=Samples(transaction)
+        tx.beginMs,tx.finishMs,tx.totalMs=entered-transactionStarted,transactionFinished-leaving,
+            transactionFinished-transactionStarted
+        return S.Ok({readOnly=true,sampleCount=3,assetId=assetId,bridge=Samples(bridge),database=Samples(direct),
+            transaction=tx,batchedTransaction={statementCount=3,batchCallMs=batchCallMs,
+                beginMs=batchEntered-batchStarted,finishMs=batchFinished-batchLeaving,totalMs=batchFinished-batchStarted},
+            assets=Samples(assets)})
+    end)
+    probeBusy=false
+    return ok and result or S.Persistence.DatabaseError(result)
+end
 function N.Install()
     for _,entry in ipairs({{'dispatch',N.Dispatch},{'bind',N.Bind},{'store',N.Store},
-        {'request',N.Request,true},{'store_current',N.StoreCurrent,true}}) do
+        {'request',N.Request,true},{'store_current',N.StoreCurrent,true},{'movement_proof',N.MovementProof,true},
+        {'whistle',N.Whistle,true},{'whistle_claim',N.WhistleClaim,false}}) do
         local action,empty=entry[1],entry[3]
         local registered=S.Core.Call('RegisterRpc','stables.horses.call.'..action..'.v1',entry[2],{
             contract=1,direction='client_to_server',requireCharacter=true,windowMs=2000,maxCalls=2,
             maxPayloadBytes=empty and 16 or 192,maxDepth=empty and 1 or 2,maxNodes=empty and 2 or 6,
             validatePayload=function(p)
                 if empty then return type(p)=='table' and next(p)==nil end
+                if action=='whistle_claim' then return N.WhistlePayload(p) end
                 return Payload(p,action=='bind')
             end})
         if not registered.ok then return registered end
@@ -324,6 +475,10 @@ function N.Install()
         if source~=0 then return end
         CreateThread(function()
             local ok,result=pcall(function()
+                if args[1]=='latency_probe' then
+                    if #args~=2 then return S.Err('invalid_input','BccStablesNative latency_probe <horseAssetId>') end
+                    return N.LatencyProbe(args[2])
+                end
                 if args[1]=='process_status' then
                     if #args~=1 then return S.Err('invalid_input','BccStablesNative process_status') end
                     local ready=S.Foundation.RequireReady(); if not ready.ok then return ready end
@@ -367,7 +522,7 @@ function N.Install()
     AddEventHandler('playerDropped',function()
         for _,r in pairs(records) do if r.context.source==source then Cancel(r) end end
     end)
-    return S.Ok({routes=5})
+    return S.Ok({routes=8})
 end
 function N.Run()
     CreateThread(function()
@@ -644,19 +799,37 @@ end
 -- A successful RPC never replaces the single authoritative create instruction.
 function N.Request(p,source,context)
     if type(p)~='table' or next(p)~=nil then return S.Err('invalid_input','Call request accepts no fields.') end
+    local started=GetGameTimer()
     local checked=Check(source,context); if not checked.ok then return checked end
     if not enabled or not running then return S.Err('native_calls_disabled','Native calls are disabled.') end
     if draining then return S.Err('native_calls_draining','Native dispatch is drained until resource restart.') end
     if GetResourceState('feather-toolkit')~='started' then return S.Err('dependency_unavailable','Toolkit is required for horse models.') end
     local position=Position(source); if not position.ok then return position end
     context=S.Copy(context)
-    local selected=S.Selection.Get({},source,context); if not selected.ok then return selected end
-    if not selected.value.selected or not selected.value.available then
-        return S.Err('selection_required','Select an available owned horse first.')
-    end
-    local prepared=S.Calls.Prepare({expectedSelectionRevision=selected.value.revision},source,context)
+    -- All potentially yielding native prerequisites precede the fresh owned
+    -- preparation snapshot. DispatchPrepared then consumes it without DB reads.
+    local allocated,observer=pcall(DB.value,'SELECT UUID()')
+    if not allocated then return S.Persistence.DatabaseError(observer) end
+    if not S.Operations.IsUuid(observer) then return S.Err('invalid_contract','Observer UUID required.') end
+    local epoch=N.ProcessEpoch(); if not epoch.ok then return epoch end
+    checked=Check(source,context); if not checked.ok then return checked end
+    if draining then return S.Err('native_calls_draining','Native dispatch is drained until resource restart.') end
+    local preparationStarted=GetGameTimer()
+    local preparationStages={}
+    local prepared=S.Calls.PlanForDispatch(source,context,preparationStages)
     if not prepared.ok then return prepared end
-    return N.Dispatch({generationId=prepared.value.generationId},source,context)
+    local preparedAt=GetGameTimer()
+    prepared.value.observerId=observer:lower()
+    local dispatched=N.DispatchPrepared(prepared.value,source,context)
+    if dispatched.ok then
+        local finished=GetGameTimer()
+        Timing('request generationId=%s preflightMs=%d selectionMs=%d preparationMs=%d dispatchMs=%d totalMs=%d',
+            prepared.value.lease.generationId,preparationStarted-started,0,preparedAt-preparationStarted,finished-preparedAt,finished-started)
+        Timing('preparation generationId=%s generationUuidMs=%d selectionMs=%d transactionMs=%d recheckMs=%d existingLeaseMs=%d',
+            prepared.value.lease.generationId,preparationStages.generationUuidMs or 0,preparationStages.selectionMs or 0,
+            preparationStages.transactionMs or 0,preparationStages.recheckMs or 0,preparationStages.existingLeaseMs or 0)
+    end
+    return dispatched
 end
 function N.StoreCurrent(p,source,context)
     if type(p)~='table' or next(p)~=nil then return S.Err('invalid_input','Current store accepts no fields.') end
@@ -668,4 +841,112 @@ function N.StoreCurrent(p,source,context)
     local id=saved.value.generationId
     if saved.value.state=='prepared' then return S.Calls.Abort({generationId=id},source,context) end
     return N.Store({generationId=id},source,context)
+end
+
+-- Controlled feasibility aid only. No persistent gameplay/progression authority.
+function N.MovementProof(p,source,context)
+    if type(p)~='table' or next(p)~=nil then return S.Err('invalid_input','Movement proof accepts no fields.') end
+    local checked=Check(source,context); if not checked.ok then return checked end
+    if not enabled or not running then return S.Err('native_calls_disabled','Native calls are disabled.') end
+    if draining then return S.Err('native_calls_draining','Native dispatch is draining.') end
+    local saved=S.CallRepository.Get(context.characterId:lower()); if not saved.ok then return saved end
+    local v=saved.value
+    local r=v.generationId and records[v.generationId]
+    if v.state~='active' or not r or r.context.source~=source or r.context.sessionId~=context.sessionId
+        or r.context.characterId~=context.characterId:lower() then return S.Err('stale_call','Current owned active observer required.') end
+    if r.busy or r.cancelled or r.phase~='active' then return S.Err('binding_conflict','Movement proof is unavailable.') end
+    r.busy=true
+    local ok,result=pcall(function()
+        local owned=S.OwnedHorses.GetKnown(v.horseId,v.operationId,source,context); if not owned.ok then return owned end
+        checked=Check(source,context); if not checked.ok then return checked end
+        if r.cancelled or not running or draining or r.phase~='active' or not Same(r)
+            or GetEntityRoutingBucket(r.entity)~=0 then return S.Err('stale_call','Observed identity changed.') end
+        if NetworkGetEntityOwner(r.entity)~=source then return S.Err('control_required','Current owner must control the horse for this proof.') end
+        local ped=GetPlayerPed(source); if not Exists(ped) then return S.Err('player_unavailable','Current player ped required.') end
+        local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
+        if not a or not b or not Finite(a.x) or not Finite(a.y) or not Finite(a.z)
+            or not Finite(b.x) or not Finite(b.y) or not Finite(b.z)
+            or (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2>64 then return S.Err('too_far','Stand within eight meters of the horse.') end
+
+        r.movementProof=true -- Diagnostic only; never used to grant gameplay authority.
+        return S.Ok({generationId=r.id,observerId=r.observerId,netId=r.netId,modelKey=r.modelKey,
+            state='active',movementProof=true,gameplayAvailable=false})
+    end)
+    r.busy=false
+    return ok and result or S.Persistence.DatabaseError(result)
+end
+
+
+function N.WhistlePayload(p)
+    if type(p)~='table' or not S.Operations.IsUuid(p.generationId)
+        or type(p.sequence)~='number' or p.sequence%1~=0 or p.sequence<1 or p.sequence>2147483647 then return false end
+    for k in pairs(p) do if k~='generationId' and k~='sequence' then return false end end
+    return true
+end
+
+local function WhistleLive(r)
+    return running and enabled and not draining and not r.cancelled and r.phase=='active'
+        and S.Core.IsSessionCurrent(r.context) and GetPlayerRoutingBucket(r.context.source)==0
+        and Same(r) and GetEntityRoutingBucket(r.entity)==0
+end
+
+-- Only the character owner can request movement. The simulator may only redeem
+-- a short-lived server ticket for that exact live observer and target ped.
+function N.Whistle(p,source,context)
+    if type(p)~='table' or next(p)~=nil then return S.Err('invalid_input','Whistle accepts no fields.') end
+    local checked=Check(source,context); if not checked.ok then return checked end
+    local saved=S.CallRepository.Get(context.characterId:lower()); if not saved.ok then return saved end
+    local v=saved.value; local r=v.generationId and records[v.generationId]
+    if v.state~='active' or not r or r.context.source~=source or r.context.sessionId~=context.sessionId
+        or r.context.characterId~=context.characterId:lower() or not WhistleLive(r) then return S.Err('stale_call','Current owned observer required.') end
+    if r.busy then return S.Err('busy','Horse is busy.') end
+    if GetGameTimer()-(r.lastWhistle or -2000)<1500 then return S.Err('rate_limited','Whistle cooldown.') end
+    r.busy=true
+    local ok,result=pcall(function()
+        local owned=S.OwnedHorses.GetKnown(v.horseId,v.operationId,source,context); if not owned.ok then return owned end
+        checked=Check(source,context); if not checked.ok then return checked end
+        if not WhistleLive(r) then return S.Err('stale_call','Observer changed.') end
+        local ped=GetPlayerPed(source); if not Exists(ped) then return S.Err('player_unavailable','Current player required.') end
+        local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
+        if not a or not b or not Finite(a.x) or not Finite(a.y) or not Finite(a.z)
+            or not Finite(b.x) or not Finite(b.y) or not Finite(b.z)
+            or (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2>10000 then return S.Err('too_far','Whistle relay is limited to 100 meters; relocation is not implemented.') end
+        local owner=NetworkGetEntityOwner(r.entity)
+        if type(owner)~='number' or owner<1 or GetPlayerRoutingBucket(owner)~=0 then return S.Err('control_unavailable','No eligible network owner.') end
+        local targetNet=NetworkGetNetworkIdFromEntity(ped)
+        if type(targetNet)~='number' or targetNet<1 then return S.Err('player_unavailable','Network player ped required.') end
+        if r.whistle then TriggerClientEvent('bcc-stables:call:whistle_cancel',r.whistle.owner,{generationId=r.id,observerId=r.observerId,sequence=r.whistle.sequence}) end
+        r.whistleSequence=(r.whistleSequence or 0)+1
+        r.lastWhistle=GetGameTimer()
+        r.whistle={sequence=r.whistleSequence,owner=owner,target=ped,targetNet=targetNet,expires=GetGameTimer()+5000}
+        TriggerClientEvent('bcc-stables:call:whistle',owner,{generationId=r.id,sequence=r.whistleSequence})
+        return S.Ok({generationId=r.id,networkOwner=owner,relayed=true,gameplayAvailable=false})
+    end)
+    r.busy=false
+    return ok and result or S.Persistence.DatabaseError(result)
+end
+
+function N.WhistleClaim(p,source,context)
+    if not N.WhistlePayload(p) then return S.Err('invalid_input','Exact whistle ticket required.') end
+    local checked=Check(source,context); if not checked.ok then return checked end
+    local r=records[p.generationId]; local ticket=r and r.whistle
+    if not r or not ticket or ticket.claimed or ticket.sequence~=p.sequence or ticket.owner~=source
+        or GetGameTimer()>ticket.expires or not WhistleLive(r) then return S.Err('stale_whistle','Whistle ticket is unavailable.') end
+    if r.busy then return S.Err('busy','Horse is busy.') end
+    r.busy=true
+    local ok,result=pcall(function()
+        local saved=S.CallRepository.Get(r.context.characterId,r.id); if not saved.ok then return saved end
+        if saved.value.state~='active' then return S.Err('stale_whistle','Call is no longer active.') end
+        local owned=S.OwnedHorses.GetKnown(saved.value.horseId,saved.value.operationId,r.context.source,r.context)
+        if not owned.ok then return owned end
+        checked=Check(source,context); if not checked.ok then return checked end
+        if r.whistle~=ticket or not WhistleLive(r) or GetGameTimer()>ticket.expires
+            or NetworkGetEntityOwner(r.entity)~=source or GetPlayerPed(r.context.source)~=ticket.target
+            or NetworkGetNetworkIdFromEntity(ticket.target)~=ticket.targetNet then return S.Err('stale_whistle','Task identity/control changed.') end
+        ticket.claimed=true
+        return S.Ok({generationId=r.id,observerId=r.observerId,sequence=ticket.sequence,netId=r.netId,
+            modelKey=r.modelKey,targetNetId=ticket.targetNet,ownerSource=r.context.source})
+    end)
+    r.busy=false
+    return ok and result or S.Persistence.DatabaseError(result)
 end

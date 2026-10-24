@@ -70,8 +70,9 @@ test('keyset pages bound canonical work and advance cursor',function()
     for i=1,12 do local id=('10000000-0000-4000-8000-%012d'):format(i)
         m.db.horses[id]={horse_id=id,origin_operation_id=id,owner_character_id=m.t.characterId}
     end
-    m.S.FulfillmentRepository.Get=function(id) return m.S.Ok({horseId=id,operationId=id,assetId=id,availability='stored'}) end
-    m.S.AssetRegistration.Get=function(id) return m.S.Ok({state='linked',assetId=id,assetRevision=1,request={}}) end
+    m.S.FulfillmentRepository.GetOwnedSnapshot=function(id) return m.S.Ok({
+        horse={horseId=id,operationId=id,assetId=id,availability='stored',projectionRevision=0},
+        registration={state='linked',assetId=id,assetRevision=1,request={}}}) end
     m.S.AssetRegistration.Matches=function() return true end
     m.S.Assets.ReadHorse=function(id) reads=reads+1; return m.S.Ok({assetId=id,revision=1,status='active',modelKey='a_c_horse_morgan_bay',
         owner={holderType='character',holderId=m.t.characterId}}) end
@@ -87,4 +88,98 @@ test('routes require Core character and strict bounded UUID payloads',function()
     assert(list.requireCharacter and get.requireCharacter and list.maxPayloadBytes==128 and list.maxCalls==2)
     assert(list.validatePayload({}) and not get.validatePayload({}) and get.validatePayload({horseId=m.t.horseId}))
 end)
+test('owned snapshot batches initial locks in original order on every read',function()
+    local m=fixture(); local transaction=m.env.DB.transaction; local seen=0
+    m.env.DB.transaction=function(body) return transaction(function(tx)
+        local batch=tx.batch
+        tx.batch=function(statements)
+            if statements[1].sql:find('fs_character_stables',1,true) then
+                seen=seen+1; assert(#statements==4)
+                assert(statements[2].sql:find('fs_operations',1,true))
+                assert(statements[3].sql:find('fs_asset_registrations',1,true))
+                for i=1,3 do assert(statements[i].sql:find('FOR UPDATE',1,true)) end
+                assert(statements[4].sql:find('LEFT JOIN fs_horse_history',1,true))
+            end
+            return batch(statements)
+        end
+        return body(tx)
+    end) end
+    assert(m.ownedGet().ok and seen==1)
+    m.asset.owner.holderId='20000000-0000-4000-8000-000000000099'
+    assert(m.ownedGet().code=='horse_not_found' and seen==2)
+end)
+
+test('malformed owned lock batches refuse access and do not cache failure',function()
+    for _,bad in ipairs({false,{},{{},{},{}},{{{},{}},{},{}},{{},{}}}) do
+        local m=fixture(); local transaction=m.env.DB.transaction
+        m.env.DB.transaction=function(body) return transaction(function(tx)
+            local batch=tx.batch
+            tx.batch=function(statements)
+                if statements[1].sql:find('fs_character_stables',1,true) then return bad end
+                return batch(statements)
+            end
+            return body(tx)
+        end) end
+        assert(not m.ownedGet().ok)
+        m.env.DB.transaction=transaction; assert(m.ownedGet().ok)
+    end
+end)
+
+test('owned artifacts are read inside initial batch without standalone query',function()
+    local m=fixture(); local transaction=m.env.DB.transaction; local seen=0
+    m.env.DB.transaction=function(body) return transaction(function(tx)
+        local batch,one=tx.batch,tx.one; local batching=false
+        tx.one=function(sql,...)
+            if sql:find('LEFT JOIN fs_horse_history',1,true) then assert(batching); seen=seen+1 end
+            return one(sql,...)
+        end
+        tx.batch=function(statements)
+            batching=true; local rows=batch(statements); batching=false; return rows
+        end
+        return body(tx)
+    end) end
+    assert(m.ownedGet().ok and seen==1)
+end)
+
+test('missing or oversized batched artifacts deny owned access',function()
+    for _,extra in ipairs({false,true}) do
+        local m=fixture(); local transaction=m.env.DB.transaction
+        m.env.DB.transaction=function(body) return transaction(function(tx)
+            local batch=tx.batch
+            tx.batch=function(statements)
+                local rows=batch(statements)
+                if statements[1].sql:find('fs_character_stables',1,true) then
+                    rows[4]=extra and {rows[4][1],rows[4][1]} or {}
+                end
+                return rows
+            end
+            return body(tx)
+        end) end
+        assert(m.ownedGet().code==(extra and 'invalid_projection' or 'fulfillment_incomplete'))
+        m.env.DB.transaction=transaction; assert(m.ownedGet().ok)
+    end
+end)
+
+test('known lease identity avoids lookup but still checks fresh canonical ownership',function()
+    local m=fixture(); local one=m.env.DB.one; local assets=m.S.Assets.ReadHorse; local reads=0
+    m.env.DB.one=function(sql,...)
+        assert(not sql:find('SELECT horse_id,origin_operation_id FROM fs_horses',1,true),'redundant identity lookup')
+        return one(sql,...)
+    end
+    m.S.Assets.ReadHorse=function(...) reads=reads+1; return assets(...) end
+    local function known() return m.h.GetKnown(m.t.horseId,m.t.operationId,1,m.context) end
+    assert(known().ok and reads==1)
+    m.asset.owner.holderId='20000000-0000-4000-8000-000000000099'
+    assert(known().code=='horse_not_found' and reads==2)
+end)
+
+test('known identity never authorizes mismatched horse purchase or character',function()
+    local m=fixture(); local foreign='20000000-0000-4000-8000-000000000099'
+    assert(m.h.GetKnown(foreign,m.t.operationId,1,m.context).code=='invalid_projection')
+    assert(not m.h.GetKnown(m.t.horseId,foreign,1,m.context).ok)
+    assert(m.h.GetKnown(m.t.horseId,'bad',1,m.context).code=='invalid_input')
+    m.context.characterId=foreign
+    assert(not m.h.GetKnown(m.t.horseId,m.t.operationId,1,m.context).ok)
+end)
+
 print(count..'/'..count..' owned horse cases passed; live Core/Assets reads remain pending.')

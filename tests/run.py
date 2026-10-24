@@ -25,6 +25,9 @@ lua.execute(Path('tests/owned_horses_client.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/selection.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/calls.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/call_lifecycle.lua').read_text(encoding='utf-8'))
+lua.execute(Path('tests/horse_projection.lua').read_text(encoding='utf-8'))
+lua.execute(Path('tests/owned_snapshot.lua').read_text(encoding='utf-8'))
+lua.execute(Path('tests/snapshot_proof.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/native_calls.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/native_calls_client.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/client.lua').read_text(encoding='utf-8'))
@@ -40,3 +43,9 @@ lua.execute(Path('tests/payment_proof.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/paid_link_proof.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/asset_proof.lua').read_text(encoding='utf-8'))
 lua.execute(Path('tests/repository_proof.lua').read_text(encoding='utf-8'))
+
+# Execute the actual joined SELECT against a SQL engine, independently of Lua mocks.
+import runpy
+runpy.run_path("tests/snapshot_sql.py")
+
+runpy.run_path("tests/snapshot_proof_sql.py")

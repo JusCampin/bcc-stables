@@ -8,7 +8,7 @@ local function fixture()
     e.StablesConfig.callPreparation=true; assert(S.Calls.Start().ok)
     m.id=S.Calls.Prepare({expectedSelectionRevision=1},1,m.context).value.generationId
     m.time,m.events,m.routes,m.handlers,m.threads=0,{},{},{},{}
-    m.entities={[10]={exists=true,model=0,owner=1,bucket=0,pos={x=0,y=0,z=0},state={}}}
+    m.entities={[10]={exists=true,model=0,netId=72,owner=1,bucket=0,pos={x=0,y=0,z=0},state={}}}
     m.convars={}
     e.GetConvar=function(key,default) return m.convars[key] or default end
     e.SetConvar=function(key,value) m.convars[key]=value end
@@ -77,6 +77,7 @@ local function fixture()
     end
     assert(loadfile('server/native_calls.lua','t',e))()
     m.n=S.NativeCalls; e.StablesConfig.nativeCalls=true; assert(m.n.Start().ok and m.n.Install().ok)
+    assert(loadfile('tests/fixtures/production_snapshot.lua'))()(m)
     S.Core.RequireSession=function(source)
         if source~=1 then return S.Err('character_required','No current character.') end
         return S.Ok(S.Copy(m.context))
@@ -127,6 +128,22 @@ local function fixture()
     return m
 end
 local function active() local m=fixture(); assert(m.dispatch().ok); m.horse(); assert(m.bind().ok); return m end
+
+test('abort during observer UUID lookup defeats observed prepared handoff',function()
+    local m=fixture(); local once=false
+    m.onUuid=function()
+        if not once then once=true; assert(m.S.Calls.Abort({generationId=m.id},1,m.context).ok) end
+    end
+    assert(m.dispatch().code=='submission_conflict' and not m.instruction)
+    assert(m.get().value.state=='empty')
+end)
+
+test('ownership loss during observer UUID lookup prevents native instruction',function()
+    local m=fixture()
+    m.onUuid=function() m.asset.owner.holderId='20000000-0000-4000-8000-000000000099' end
+    assert(not m.dispatch().ok and not m.instruction)
+    assert(m.get().value.state=='prepared')
+end)
 
 test('disabled dispatch cannot claim prepared generation',function()
     local m=fixture(); m.env.StablesConfig.nativeCalls=false; assert(m.n.Start().ok)
@@ -753,6 +770,434 @@ test('session loss after current-slot read suppresses mutation',function()
     end
     assert(m.n.StoreCurrent({},1,m.context).code=='session_stale')
     assert(m.db.callLeases[m.id].state=='prepared' and not m.instruction)
+end)
+
+test('request timings include its single selection snapshot inside preparation',function()
+    local m=fixture(); local logs={}; m.env.print=function(msg) logs[#logs+1]=msg end
+    local check=m.S.Foundation.CheckSession; m.S.Foundation.CheckSession=function(...) m.time=m.time+20; return check(...) end
+    m.S.Selection.Get=function() error('outer request must not perform another selection read') end
+    m.S.Calls.PlanForDispatch=function(source,context,stages)
+        stages.generationUuidMs=10; stages.selectionMs=50; stages.transactionMs=100; stages.recheckMs=40
+        m.time=m.time+200; return m.S.Ok({lease={generationId=m.id}}) end
+    m.n.DispatchPrepared=function() m.time=m.time+300; return m.S.Ok({generationId=m.id,state='submitting'}) end
+    assert(m.n.Request({},1,m.context).ok)
+    assert(logs[1]:find('preflightMs=40 selectionMs=0 preparationMs=200 dispatchMs=300 totalMs=540',1,true))
+    assert(logs[2]:find('generationUuidMs=10 selectionMs=50 transactionMs=100 recheckMs=40',1,true))
+end)
+test('bind timings distinguish durable commit and both canonical validations',function()
+    local m=fixture(); assert(m.dispatch().ok); m.horse()
+    local logs={}; m.env.print=function(msg) logs[#logs+1]=msg end
+    local owned=m.S.OwnedHorses.Get; m.S.OwnedHorses.Get=function(...) m.time=m.time+40; return owned(...) end
+    local known=m.S.OwnedHorses.GetKnown; m.S.OwnedHorses.GetKnown=function(...) m.time=m.time+40; return known(...) end
+    local bind=m.S.CallLifecycleRepository.Bind; m.S.CallLifecycleRepository.Bind=function(...) m.time=m.time+60; return bind(...) end
+    assert(m.bind().ok and m.get().value.state=='active')
+    assert(logs[1]:find('observationMs=0 validationMs=40 commitMs=60 recheckMs=40 totalMs=140',1,true))
+end)
+test('timing sink failure cannot change a successful server binding',function()
+    local m=fixture(); assert(m.dispatch().ok); m.horse()
+    m.env.print=function(msg) if msg:find('[bcc-stables:timing]',1,true) then error('logging unavailable') end end
+    assert(m.bind().ok and m.get().value.state=='active' and not m.deletes)
+end)
+
+test('dispatch timings separate scoped read UUID claim and process receipt',function()
+    local m=fixture(); assert(m.n.ProcessEpoch().ok)
+    local logs={}; m.env.print=function(msg) logs[#logs+1]=msg end
+    local get=m.S.CallRepository.Get
+    m.S.CallRepository.Get=function(...) m.time=m.time+10; return get(...) end
+    m.onUuid=function() m.time=m.time+20 end
+    local claim=m.S.Calls.ClaimObservedSubmission
+    m.S.Calls.ClaimObservedSubmission=function(...) m.time=m.time+30; return claim(...) end
+    local receipt=m.S.CallLifecycleRepository.RecordProcessEpoch
+    m.S.CallLifecycleRepository.RecordProcessEpoch=function(...) m.time=m.time+40; return receipt(...) end
+    assert(m.dispatch().ok and m.instruction)
+    assert(logs[1]:find('scopedReadMs=10 observerUuidMs=20 processEpochMs=0 claimMs=30 processReceiptMs=40 totalMs=100',1,true))
+end)
+
+test('dispatch timing sink failure cannot suppress its single spawn instruction',function()
+    local m=fixture()
+    m.env.print=function(msg) if msg:find('[bcc-stables:timing]',1,true) then error('logging unavailable') end end
+    assert(m.dispatch().ok and m.instruction and #m.events==1)
+    assert(m.get().value.state=='submitting')
+end)
+
+test('claim timings separate selected ownership transaction and postcommit ownership',function()
+    local m=fixture(); local logs={}; m.env.print=function(msg) logs[#logs+1]=msg end
+    local selected=m.S.Selection.Get
+    m.S.Selection.Get=function(...) m.time=m.time+10; return selected(...) end
+    local owned=m.S.OwnedHorses.Get
+    m.S.OwnedHorses.Get=function(...) m.time=m.time+40; return owned(...) end
+    local known=m.S.OwnedHorses.GetKnown; m.S.OwnedHorses.GetKnown=function(...) m.time=m.time+40; return known(...) end
+    local claim=m.S.CallRepository.ClaimSubmission
+    m.S.CallRepository.ClaimSubmission=function(...) m.time=m.time+20; return claim(...) end
+    assert(m.dispatch().ok and m.instruction)
+    assert(logs[2]:find('claim generationId='..m.id..' selectionMs=50 transactionMs=20 recheckMs=40',1,true))
+end)
+
+local function probeFixture()
+    local m=fixture(); m.probeCounts={bridge=0,direct=0,transaction=0,assets=0}
+    m.env.DB.isReady=function()
+        assert(not m.inTx)
+        m.probeCounts.bridge=m.probeCounts.bridge+1; m.time=m.time+7
+        return true
+    end
+    m.env.DB.value=function(sql)
+        assert(sql=='SELECT 1' and not m.inTx)
+        m.probeCounts.direct=m.probeCounts.direct+1; m.time=m.time+10
+        return 1
+    end
+    m.env.DB.stmt=function(sql) return {sql=sql,params={}} end
+    m.env.DB.transaction=function(body)
+        m.time=m.time+20; m.inTx=true
+        local result=body({value=function(sql)
+            assert(sql=='SELECT 1' and m.inTx)
+            m.probeCounts.transaction=m.probeCounts.transaction+1; m.time=m.time+30
+            return 1
+        end,batch=function(statements)
+            assert(#statements==3 and m.inTx)
+            for _,statement in ipairs(statements) do assert(statement.sql=='SELECT 1 AS probe_value') end
+            m.time=m.time+60
+            return {{{probe_value=1}},{{probe_value=1}},{{probe_value=1}}}
+        end})
+        m.inTx=false; m.time=m.time+40
+        return result
+    end
+    m.S.Assets.ReadHorse=function(id)
+        assert(id==m.asset.assetId and not m.inTx)
+        m.probeCounts.assets=m.probeCounts.assets+1; m.time=m.time+50
+        return m.S.Ok({assetId=id,assetType='horse'})
+    end
+    m.probe=function() return m.n.LatencyProbe(m.asset.assetId) end
+    return m
+end
+
+test('read-only probe bounds all samples and separates transaction begin finish and query costs',function()
+    local m=probeFixture(); local r=m.probe(); assert(r.ok)
+    local v=r.value
+    assert(v.readOnly and v.sampleCount==3 and v.bridge.medianMs==7 and v.database.medianMs==10 and v.assets.medianMs==50)
+    assert(v.transaction.medianMs==30 and v.transaction.beginMs==20 and v.transaction.finishMs==40 and v.transaction.totalMs==150)
+    assert(v.batchedTransaction.batchCallMs==60 and v.batchedTransaction.totalMs==120)
+    assert(m.probeCounts.bridge==3 and m.probeCounts.direct==3 and m.probeCounts.transaction==3 and m.probeCounts.assets==3)
+    assert(not m.instruction and not m.deletes and m.db.callLeases[m.id].state=='prepared')
+end)
+
+test('read-only probe refuses overlap and resets its busy guard after dependency failure',function()
+    local m=probeFixture(); local read=m.S.Assets.ReadHorse
+    m.S.Assets.ReadHorse=function(id)
+        assert(m.probe().code=='busy')
+        return m.S.Err('assets_unavailable','Unavailable')
+    end
+    assert(m.probe().code=='assets_unavailable')
+    m.S.Assets.ReadHorse=read; assert(m.probe().ok)
+end)
+
+test('read-only probe rejects invalid identity results and clears guard after SQL error',function()
+    local m=probeFixture(); assert(m.n.LatencyProbe('bad').code=='invalid_input' and m.probeCounts.direct==0)
+    local value=m.env.DB.value
+    m.env.DB.value=function() error({code='CONNECTION_LOST',outcome='unknown'}) end
+    assert(m.probe().code=='database_error')
+    m.env.DB.value=function() return 2 end
+    assert(m.probe().code=='invalid_contract')
+    m.env.DB.value=value
+    m.S.Assets.ReadHorse=function() return m.S.Ok({assetId='wrong',assetType='horse'}) end
+    assert(m.probe().code=='invalid_contract')
+end)
+
+test('read-only probe console entry refuses player callers and extra arguments',function()
+    local m=probeFixture(); local command=m.handlers.BccStablesNative
+    local before=#m.threads; command(1,{'latency_probe',m.asset.assetId})
+    assert(#m.threads==before and m.probeCounts.direct==0)
+    command(0,{'latency_probe',m.asset.assetId,'SELECT 2'})
+    m.threads[#m.threads]()
+    assert(m.probeCounts.direct==0)
+    command(0,{'latency_probe',m.asset.assetId}); m.threads[#m.threads]()
+    assert(m.probeCounts.direct==3 and m.probeCounts.assets==3)
+end)
+
+test('read-only probe refuses invalid or uncommitted transaction results before Assets reads',function()
+    local m=probeFixture(); local transaction=m.env.DB.transaction
+    m.env.DB.transaction=function(body)
+        return body({value=function() return 2 end})
+    end
+    assert(m.probe().code=='invalid_contract' and m.probeCounts.assets==0)
+    m.env.DB.transaction=function(body) transaction(body); return false end
+    assert(m.probe().code=='transaction_rolled_back' and m.probeCounts.assets==0)
+    m.env.DB.transaction=transaction; assert(m.probe().ok)
+end)
+
+test('no-SQL readiness probe failure stops before SQL and permits a later retry',function()
+    local m=probeFixture(); local ready=m.env.DB.isReady
+    m.env.DB.isReady=function() return false end
+    assert(m.probe().code=='dependency_unavailable' and m.probeCounts.direct==0 and m.probeCounts.assets==0)
+    m.env.DB.isReady=ready
+    assert(m.probe().ok and m.probeCounts.bridge==3)
+end)
+
+test('simplified request uses one selection snapshot and two fresh Assets reads through dispatch',function()
+    local m=fixture(); local selected=m.S.Selection.Get; local owned=m.S.Assets.ReadHorse
+    local selections,assets=0,0
+    m.S.Selection.Get=function(...) selections=selections+1; return selected(...) end
+    m.S.Assets.ReadHorse=function(...) assets=assets+1; return owned(...) end
+    m.S.Calls.Prepare=function() error('must not compose the explicit client-revision entry') end
+    assert(m.n.Request({},1,m.context).ok and m.instruction)
+    assert(selections==1 and assets==2)
+end)
+
+test('prepared request performs no yielding reads between handoff and locked claim',function()
+    local m=fixture(); local after,entered=false,false
+    local prepare=m.S.Calls.PlanForDispatch
+    m.S.Calls.PlanForDispatch=function(...)
+        local result=prepare(...); after=true; return result
+    end
+    local value=m.env.DB.value
+    m.env.DB.value=function(...) assert(not after or entered,'UUID query after fresh handoff'); return value(...) end
+    local get=m.S.CallRepository.Get
+    m.S.CallRepository.Get=function(...) assert(not after or entered,'scoped reread after fresh handoff'); return get(...) end
+    local selected=m.S.Selection.Get
+    m.S.Selection.Get=function(...) assert(not after or entered,'selection reread after fresh handoff'); return selected(...) end
+    local claim=m.S.CallRepository.PrepareAndClaim
+    m.S.CallRepository.PrepareAndClaim=function(...) entered=true; return claim(...) end
+    assert(m.n.Request({},1,m.context).ok and entered and m.instruction)
+end)
+
+test('observer allocation failure occurs before any current preparation snapshot or new claim',function()
+    local m=fixture(); m.S.Calls.PlanForDispatch=function() error('preparation must not run') end
+    m.env.DB.value=function() error({code='UNAVAILABLE',outcome='not_executed'}) end
+    assert(m.n.Request({},1,m.context).code=='database_error' and not m.instruction)
+    assert(m.get().value.state=='prepared')
+end)
+
+test('prepared dispatch rejects missing capability without consulting shared observer state',function()
+    local m=fixture()
+    assert(m.n.DispatchPrepared({},1,m.context).code=='invalid_input')
+    local r=m.n.DispatchPrepared({lease={generationId=m.id,characterId=m.t.characterId,source=1,sessionId=m.context.sessionId}},1,m.context)
+    assert(r.code=='call_not_found' and not m.instruction and m.get().value.state=='prepared')
+end)
+
+test('simplified claim commits process receipt before instruction without second receipt transaction',function()
+    local m=fixture(); local trigger=m.env.TriggerClientEvent; local seen=false
+    m.S.CallLifecycleRepository.RecordProcessEpoch=function() error('redundant receipt transaction') end
+    m.env.TriggerClientEvent=function(name,...)
+        if name=='bcc-stables:call:create' then
+            seen=true; assert(m.db.callLeases[m.id].state=='submitting')
+            assert(m.db.callEpochs[m.id].process_epoch==m.convars.bcc_stables_process_epoch_v1)
+        end
+        return trigger(name,...)
+    end
+    assert(m.n.Request({},1,m.context).ok and seen and m.instruction)
+end)
+
+test('atomic process insert failure rolls back claim and never instructs creation',function()
+    local m=fixture(); m.failEpochInsert=true
+    assert(m.n.Request({},1,m.context).code=='database_error' and not m.instruction)
+    assert(not m.db.callEpochs[m.id] and m.db.callLeases[m.id].state=='prepared')
+    assert(m.db.callSlots[m.t.characterId].generation_id==m.id)
+    m.failEpochInsert=false
+    assert(m.n.Request({},1,m.context).ok and m.instruction)
+end)
+
+test('unknown atomic claim receipt commit retains fence without creation or replay',function()
+    local m=fixture(); local transaction=m.env.DB.transaction; local lost=false
+    m.env.DB.transaction=function(body)
+        local result=transaction(body)
+        if m.db.callEpochs[m.id] and not lost then lost=true; error({code='REPLY_LOST',outcome='unknown'}) end
+        return result
+    end
+    assert(m.n.Request({},1,m.context).code=='database_error' and lost and not m.instruction)
+    assert(m.db.callEpochs[m.id] and m.db.callLeases[m.id].state=='reconciliation_required')
+    assert(m.db.callSlots[m.t.characterId] and not m.n.Request({},1,m.context).ok and not m.instruction)
+end)
+
+test('ownership loss after atomic claim keeps receipt and blocks native instruction',function()
+    local m=fixture(); local transaction=m.env.DB.transaction
+    m.env.DB.transaction=function(body)
+        local result=transaction(body)
+        if m.db.callEpochs[m.id] then m.asset.owner.holderId='20000000-0000-4000-8000-000000000099' end
+        return result
+    end
+    assert(m.n.Request({},1,m.context).code=='horse_not_found' and not m.instruction)
+    assert(m.db.callEpochs[m.id] and m.db.callSlots[m.t.characterId])
+    assert(m.db.callLeases[m.id].state=='reconciliation_required')
+end)
+
+test('binding skips redundant identity lookups but keeps both canonical observations',function()
+    local m=fixture(); assert(m.dispatch().ok); m.horse()
+    local one=m.env.DB.one; local assets=m.S.Assets.ReadHorse; local reads=0
+    m.env.DB.one=function(sql,...)
+        assert(not sql:find('SELECT horse_id,origin_operation_id FROM fs_horses',1,true),'redundant identity lookup')
+        return one(sql,...)
+    end
+    m.S.Assets.ReadHorse=function(...) reads=reads+1; return assets(...) end
+    assert(m.bind().ok and reads==2 and m.get().value.state=='active')
+end)
+
+test('atomic claim groups seven ordered reads and its two writes',function()
+    local m=fixture(); local transaction=m.env.DB.transaction; local reads,writes=0,0
+    m.env.DB.transaction=function(body) return transaction(function(tx)
+        local batch=tx.batch
+        tx.batch=function(statements)
+            if #statements==7 then
+                reads=reads+1
+                for i,name in ipairs({'fs_call_slots','fs_call_leases','fs_call_bindings','fs_operations','fs_asset_registrations','fs_horses','fs_call_process_epochs'}) do
+                    assert(statements[i].sql:find(name,1,true))
+                end
+            elseif statements[1].sql:find("UPDATE fs_call_leases SET state='submitting'",1,true) then
+                writes=writes+1; assert(#statements==2 and statements[2].sql:find('INSERT INTO fs_call_process_epochs',1,true))
+            end
+            return batch(statements)
+        end
+        return body(tx)
+    end) end
+    assert(m.n.Request({},1,m.context).ok and m.instruction and reads==1 and writes==1)
+end)
+
+test('atomic claim bad write headers roll back receipt and submission together',function()
+    for _,index in ipairs({1,2}) do
+        local m=fixture(); local transaction=m.env.DB.transaction
+        m.env.DB.transaction=function(body) return transaction(function(tx)
+            local batch=tx.batch
+            tx.batch=function(statements)
+                local rows=batch(statements)
+                if statements[1].sql:find("UPDATE fs_call_leases SET state='submitting'",1,true) then rows[index]={affectedRows=0} end
+                return rows
+            end
+            return body(tx)
+        end) end
+        assert(not m.n.Request({},1,m.context).ok and not m.instruction)
+        assert(m.db.callLeases[m.id].state=='prepared' and not m.db.callEpochs[m.id])
+        assert(m.db.callSlots[m.t.characterId].generation_id==m.id)
+    end
+end)
+
+test('fresh call and bind stay within database transport budgets',function()
+    local m=fixture(); assert(m.dispatch().ok); m.horse(); assert(m.bind().ok)
+    m.n.Store({generationId=m.id},1,m.context); m.n.Tick()
+    assert(m.get().value.state=='empty' and m.n.ProcessEpoch().ok)
+    local bridges,assets=0,0
+    local transaction=m.env.DB.transaction
+    m.env.DB.transaction=function(body)
+        bridges=bridges+2 -- begin and commit; no failures in this measured path
+        return transaction(function(tx)
+            local depth=0
+            for _,name in ipairs({'one','query','exec','value'}) do
+                local fn=tx[name]
+                tx[name]=function(...) if depth==0 then bridges=bridges+1 end; return fn(...) end
+            end
+            local batch=tx.batch
+            tx.batch=function(statements)
+                bridges=bridges+1; depth=depth+1
+                local result=batch(statements); depth=depth-1; return result
+            end
+            return body(tx)
+        end)
+    end
+    for _,name in ipairs({'one','query','exec','value'}) do
+        local fn=m.env.DB[name]
+        m.env.DB[name]=function(...) bridges=bridges+1; return fn(...) end
+    end
+    local read=m.S.Assets.ReadHorse
+    m.S.Assets.ReadHorse=function(...) assets=assets+1; return read(...) end
+    local requested=m.n.Request({},1,m.context); assert(requested.ok)
+    local requestBridges,requestAssets=bridges,assets
+    m.id=requested.value.generationId; m.horse(); bridges,assets=0,0
+    assert(m.bind().ok)
+    assert(requestBridges<=17,'request database transport budget exceeded: '..requestBridges)
+    assert(bridges<=13,'binding database transport budget exceeded: '..bridges)
+    assert(requestAssets==2 and assets==2,'canonical freshness checks changed')
+end)
+
+test('unknown new-generation combined commit never instructs and retains exact recovery slot',function()
+    local m=fixture(); assert(m.S.Calls.Abort({generationId=m.id},1,m.context).ok)
+    local transaction=m.env.DB.transaction; local lost=false
+    m.env.DB.transaction=function(body)
+        local result=transaction(body)
+        if next(m.db.callEpochs) and not lost then lost=true; error({code='REPLY_LOST',outcome='unknown'}) end
+        return result
+    end
+    assert(m.n.Request({},1,m.context).code=='database_error' and lost and not m.instruction)
+    local slot=m.db.callSlots[m.t.characterId]; assert(slot and slot.generation_id~=m.id)
+    assert(m.db.callLeases[slot.generation_id].state=='reconciliation_required' and m.db.callEpochs[slot.generation_id])
+    assert(not m.n.Request({},1,m.context).ok and not m.instruction)
+end)
+
+test('movement proof authorizes only fresh owned active controlled identity',function()
+    local m=active(); local assets=0; local read=m.S.Assets.ReadHorse
+    m.S.Assets.ReadHorse=function(...) assets=assets+1; return read(...) end
+    local result=m.n.MovementProof({},1,m.context)
+    assert(result.ok and result.value.generationId==m.id and result.value.netId==71)
+    assert(result.value.movementProof and not result.value.gameplayAvailable and assets==1)
+    assert(m.get().value.state=='active' and m.db.horses[m.t.horseId].revision==1)
+end)
+test('movement proof refuses stale foreign and client-supplied identity',function()
+    local m=active(); assert(m.n.MovementProof({generationId=m.id},1,m.context).code=='invalid_input')
+    m.context.characterId='20000000-0000-4000-8000-000000000099'
+    assert(not m.n.MovementProof({},1,m.context).ok and not m.deletes)
+end)
+test('movement proof refuses canonical loss without granting cached access',function()
+    local m=active(); m.asset.owner.holderId='20000000-0000-4000-8000-000000000099'
+    assert(m.n.MovementProof({},1,m.context).code=='horse_not_found' and not m.deletes)
+end)
+test('movement proof refuses migrated control and altered observed marker',function()
+    local m=active(); m.entities[20].owner=2
+    assert(m.n.MovementProof({},1,m.context).code=='control_required')
+    m.entities[20].owner=1; m.entities[20].state.bccStablesObserver='foreign'
+    assert(m.n.MovementProof({},1,m.context).code=='stale_call')
+end)
+
+test('movement proof requires nearby current player coordinates',function()
+    local m=active(); m.entities[10].pos={x=100,y=0,z=0}
+    assert(m.n.MovementProof({},1,m.context).code=='too_far' and not m.deletes)
+end)
+
+
+test('whistle delegates to migrated network owner and ticket is one use',function()
+    local m=active(); m.entities[20].owner=2
+    local result=m.n.Whistle({},1,m.context); assert(result.ok and result.value.networkOwner==2)
+    local event=m.events[#m.events]; assert(event.name=='bcc-stables:call:whistle' and event.source==2)
+    m.S.Foundation.CheckSession=function(source) return (source==1 or source==2) and m.S.Ok(true) or m.S.Err('stale_session','test') end
+    local claim=m.n.WhistleClaim(event.payload,2,m.context)
+    assert(claim.ok and claim.value.netId==71 and claim.value.targetNetId==72)
+    assert(m.n.WhistleClaim(event.payload,2,m.context).code=='stale_whistle')
+end)
+
+test('whistle rejects foreign character and canonical ownership loss',function()
+    local m=active(); local foreign=m.S.Copy(m.context); foreign.characterId='20000000-0000-4000-8000-000000000099'
+    assert(not m.n.Whistle({},1,foreign).ok)
+    m.asset.owner.holderId=foreign.characterId
+    assert(not m.n.Whistle({},1,m.context).ok)
+    for _,event in ipairs(m.events) do assert(event.name~='bcc-stables:call:whistle') end
+end)
+
+test('whistle ticket rejects expiry and changed network owner',function()
+    local m=active(); assert(m.n.Whistle({},1,m.context).ok)
+    local event=m.events[#m.events]
+    m.entities[20].owner=2
+    assert(not m.n.WhistleClaim(event.payload,1,m.context).ok)
+    m.entities[20].owner=1; m.time=m.time+5001
+    assert(m.n.WhistleClaim(event.payload,1,m.context).code=='stale_whistle')
+end)
+
+test('store cancels delegated ticket and prevents delayed task claim',function()
+    local m=active(); assert(m.n.Whistle({},1,m.context).ok)
+    local event=m.events[#m.events]; assert(m.store().ok)
+    assert(m.n.WhistleClaim(event.payload,1,m.context).code=='stale_whistle')
+    local cancelled=false; for _,e in ipairs(m.events) do if e.name=='bcc-stables:call:whistle_cancel' then cancelled=true end end
+    assert(cancelled)
+end)
+
+test('whistle refuses far target and malformed task ticket',function()
+    local m=active(); m.entities[10].pos.x=200
+    assert(m.n.Whistle({},1,m.context).code=='too_far')
+    assert(m.n.WhistleClaim({generationId=m.id,sequence=1,netId=71},1,m.context).code=='invalid_input')
+end)
+
+test('whistle claim rechecks canonical ownership and current character incarnation',function()
+    local m=active(); assert(m.n.Whistle({},1,m.context).ok)
+    local ticket=m.events[#m.events].payload
+    m.asset.owner.holderId='20000000-0000-4000-8000-000000000099'
+    assert(not m.n.WhistleClaim(ticket,1,m.context).ok)
+    m=active(); assert(m.n.Whistle({},1,m.context).ok); ticket=m.events[#m.events].payload
+    m.entities[10].netId=99
+    assert(m.n.WhistleClaim(ticket,1,m.context).code=='stale_whistle')
 end)
 
 print(count..'/'..count..' native coordinator cases passed; native/CFX replication remains a live gate.')
