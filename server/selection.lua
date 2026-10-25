@@ -45,6 +45,10 @@ local function Save(characterId, expected, horse)
             result = read; return false
         end
         local current = read.value
+        if S.CareRepository then
+            local care=S.CareRepository.CheckCharacter(tx,characterId)
+            if not care.ok then result=care; return false end
+        end
         if current.revision ~= expected then
             result = S.Err('revision_conflict', 'Selection changed; inspect before retrying.'); return false
         end

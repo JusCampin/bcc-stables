@@ -218,6 +218,17 @@ function F.Start()
     if health.state ~= 'starting' then return Stables.Err('startup_cancelled', 'Startup was cancelled.') end
     health.checks.persistence = Stables.Copy(persisted.value)
     health.checks.persistence.ok = true
+    if Stables.CarePolicy then
+        local policy=Stables.CarePolicy.Start()
+        if not policy.ok then return Fail(policy) end
+        health.checks.carePolicy=Stables.Copy(policy.value)
+    end
+    if Stables.CareRepository then
+        local care=Stables.CareRepository.Start()
+        if not care.ok then return Fail(care) end
+        if health.state~='starting' then return Stables.Err('startup_cancelled','Startup was cancelled.') end
+        health.checks.care=Stables.Copy(care.value)
+    end
     if not Stables.OwnedSnapshot then return Fail(Stables.Err('owned_snapshot_unavailable','Owned snapshot reader is missing.')) end
     local snapshot=Stables.OwnedSnapshot.Start()
     if health.state~='starting' then Stables.OwnedSnapshot.Stop(); return Stables.Err('startup_cancelled','Startup was cancelled.') end
@@ -238,6 +249,9 @@ function F.Start()
         local subscription = Stables.Core.Call('SubscribeEvent', 'core.session.' .. stage .. '.v1', function(payload)
             -- Observe lifecycle without maintaining a second character registry.
             health.sessionEvents[stage] = health.sessionEvents[stage] + 1
+            if type(payload)=='table' and type(payload.source)=='number' and payload.source%1==0 and payload.source>0 then
+                TriggerClientEvent('bcc-stables:menu:invalidate',payload.source)
+            end
             if Stables.Proof then Stables.Proof.SessionEvent(stage, payload) end
             Stables.Quotes.SessionEvent(stage, payload)
             Stables.NativeCalls.SessionEvent(stage,payload)
@@ -287,6 +301,11 @@ function F.Start()
     local callRoutes = Stables.Calls.Install()
     if not callRoutes.ok then return Fail(callRoutes) end
     local nativeRoutes=Stables.NativeCalls.Install(); if not nativeRoutes.ok then return Fail(nativeRoutes) end
+    local careRoutes=0
+    if Stables.CareTarget then
+        local installed=Stables.CareTarget.Install(); if not installed.ok then return Fail(installed) end
+        careRoutes=installed.value.routes
+    end
     local proofRoutes = 0
     if StablesConfig.entityProof.enabled then
         if not Stables.Proof then return Fail(Stables.Err('internal_error', 'Entity proof module is missing.')) end
@@ -295,7 +314,7 @@ function F.Start()
         proofRoutes = installed.value.routes
     end
     if health.state ~= 'starting' then return Stables.Err('startup_cancelled', 'Startup was cancelled.') end
-    health.checks.registrations = { ok = true, subscriptions = #subscriptions, routes = 30 + proofRoutes }
+    health.checks.registrations = { ok = true, subscriptions = #subscriptions, routes = 33 + careRoutes + proofRoutes }
     health.state, health.reason = 'ready', 'foundation_only'
     Stables.Outbox.Run()
     Stables.NativeCalls.Run()

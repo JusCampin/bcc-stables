@@ -213,4 +213,49 @@ Stables.Migrations = {
     { id='008_call_horse_state_index', tables={}, indexes={
         {table='fs_call_leases',name='fs_call_horse_state',columns={'horse_id','state'}}
     } },
+    { id='009_horse_care_foundation', tables={
+        {name='fs_horse_condition',sql=[[CREATE TABLE IF NOT EXISTS `fs_horse_condition` (
+            `horse_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `health_core` TINYINT UNSIGNED NOT NULL,
+            `stamina_core` TINYINT UNSIGNED NOT NULL,
+            `policy_revision` INT UNSIGNED NOT NULL,
+            `revision` BIGINT UNSIGNED NOT NULL,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`horse_id`),
+            CONSTRAINT `fs_condition_horse` FOREIGN KEY (`horse_id`) REFERENCES `fs_horses` (`horse_id`),
+            CHECK (`health_core` <= 100 AND `stamina_core` <= 100),
+            CHECK (`policy_revision` > 0), CHECK (`revision` <= 9007199254740991)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]},
+        {name='fs_care_operations',sql=[[CREATE TABLE IF NOT EXISTS `fs_care_operations` (
+            `operation_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `horse_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `character_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `fingerprint` VARCHAR(700) NOT NULL,
+            `record_json` LONGTEXT NOT NULL,
+            `state` VARCHAR(32) NOT NULL,
+            `revision` BIGINT UNSIGNED NOT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`operation_id`), KEY `fs_care_character_state` (`character_id`,`state`),
+            CONSTRAINT `fs_care_horse` FOREIGN KEY (`horse_id`) REFERENCES `fs_horses` (`horse_id`),
+            CHECK (`state` IN ('prepared','consumed_effect_pending','applied','cancelled')),
+            CHECK (`revision` <= 2)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]},
+        {name='fs_care_slots',sql=[[CREATE TABLE IF NOT EXISTS `fs_care_slots` (
+            `horse_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `operation_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            PRIMARY KEY (`horse_id`), UNIQUE KEY `fs_care_slot_operation` (`operation_id`),
+            CONSTRAINT `fs_care_slot_horse` FOREIGN KEY (`horse_id`) REFERENCES `fs_horses` (`horse_id`),
+            CONSTRAINT `fs_care_slot_operation` FOREIGN KEY (`operation_id`) REFERENCES `fs_care_operations` (`operation_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]},
+        {name='fs_care_effects',sql=[[CREATE TABLE IF NOT EXISTS `fs_care_effects` (
+            `operation_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `horse_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `condition_revision` BIGINT UNSIGNED NOT NULL,
+            `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`operation_id`), UNIQUE KEY `fs_care_horse_revision` (`horse_id`,`condition_revision`),
+            CONSTRAINT `fs_care_effect_operation` FOREIGN KEY (`operation_id`) REFERENCES `fs_care_operations` (`operation_id`),
+            CONSTRAINT `fs_care_effect_horse` FOREIGN KEY (`horse_id`) REFERENCES `fs_horses` (`horse_id`),
+            CHECK (`condition_revision` > 0 AND `condition_revision` <= 9007199254740991)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin]]},
+    } },
 }

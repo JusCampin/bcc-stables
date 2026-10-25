@@ -11,6 +11,8 @@ end
 local function fixture(overrides)
     local env = setmetatable({}, { __index = _G })
     env.RegisterCommand = function() end
+    local clientEvents={}
+    env.TriggerClientEvent = function(name,target) clientEvents[#clientEvents+1]={name=name,target=target} end
     local mock = { state = 'started', time = 0, calls = {}, routes = {}, subscriptions = {}, nextToken = 0 }
     env.GetCurrentResourceName = function() return 'bcc-stables' end
     env.GetResourceMetadata = function() return '0.1.0-dev' end
@@ -66,7 +68,7 @@ local function fixture(overrides)
     for _, file in ipairs({ 'config.lua', 'config/catalog.lua', 'config/locations.lua', 'shared/contracts.lua', 'server/catalog.lua', 'server/locations.lua', 'server/quotes.lua', 'server/admissions.lua', 'server/admission_payments.lua', 'server/admission_registration.lua', 'server/fulfillment.lua', 'server/outbox.lua', 'server/owned_horses.lua', 'server/selection.lua', 'server/calls.lua', 'server/core.lua', 'server/foundation.lua' }) do
         assert(loadfile(file, 't', env))()
     end
-    mock.env, mock.stables = env, env.Stables
+    mock.env, mock.stables, mock.clientEvents = env, env.Stables, clientEvents
     env.Stables.Assets = {
         Start = function() return env.Stables.Ok({ ok = true, contract = 1, trustedRead = true }) end,
         RequireReady = function() return env.Stables.Ok(true) end,
@@ -84,7 +86,7 @@ local function fixture(overrides)
     env.Stables.OwnedSnapshot={Start=function() return env.Stables.Ok({ok=true,mode='single_statement'}) end,
         RequireReady=function() return env.Stables.Ok(true) end,Stop=function() end}
     env.Stables.NativeCalls={Start=function() return env.Stables.Ok({ok=true,enabled=false,entitySpawning=false}) end,
-        Install=function() return env.Stables.Ok({routes=8}) end,Run=function() end,Stop=function() end,SessionEvent=function() end}
+        Install=function() return env.Stables.Ok({routes=10}) end,Run=function() end,Stop=function() end,SessionEvent=function() end}
     mock.start = function() return env.Stables.Foundation.Start() end
     return mock
 end
@@ -282,7 +284,7 @@ end)
 test('catalogue startup adds only a bounded read route and capability',function()
     local m=fixture(); assert(m.start().ok)
     local health=m.stables.Foundation.Health().value
-    assert(health.checks.catalog.entries==1 and health.checks.registrations.routes==30)
+    assert(health.checks.catalog.entries==1 and health.checks.registrations.routes==33)
     assert(m.routes['stables.catalog.get.v1'].options.requireCharacter)
     assert(m.stables.Foundation.Capabilities().value.features.catalogRead==1)
 end)
@@ -319,5 +321,29 @@ test('snapshot readiness refusal prevents route registration after persistence',
     local m=fixture(); m.stables.OwnedSnapshot.Start=function() return m.stables.Err('snapshot_environment_unsupported','Unsupported isolation.') end
     assert(m.start().code=='snapshot_environment_unsupported' and next(m.routes)==nil)
 end)
+test('care recovery scan refusal prevents route registration after persistence',function()
+    local m=fixture()
+    m.stables.CareRepository={Start=function() return m.stables.Err('care_scan_failed','Unavailable pending care scan.') end}
+    assert(m.start().code=='care_scan_failed' and next(m.routes)==nil)
+end)
+test('invalid care policy prevents startup before recovery or route activation',function()
+    local m=fixture()
+    m.stables.CarePolicy={Start=function() return m.stables.Err('care_policy_invalid','Invalid configuration.') end}
+    assert(m.start().code=='care_policy_invalid' and next(m.routes)==nil)
+end)
+test('care observation routes contribute two to status without gameplay activation',function()
+    local m=fixture(); m.stables.CareTarget={Install=function() return m.stables.Ok({routes=2}) end}
+    local result=m.start(); assert(result.ok and result.value.checks.registrations.routes==35)
+end)
 
 print(('%d/%d offline cases passed; runtime entry points parse under Lua 5.4.'):format(passed, passed))
+
+
+test('existing Core session subscriptions invalidate only targeted owned menu presentation',function()
+    local m=fixture(); assert(m.start().ok)
+    for _,subscription in pairs(m.subscriptions) do subscription.callback(m.session) end
+    assert(#m.clientEvents==3)
+    for _,event in ipairs(m.clientEvents) do assert(event.name=='bcc-stables:menu:invalidate' and event.target==12) end
+    for _,subscription in pairs(m.subscriptions) do subscription.callback({source=-1}) end
+    assert(#m.clientEvents==3)
+end)

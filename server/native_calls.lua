@@ -3,6 +3,8 @@
 Stables.NativeCalls={}
 local N,S=Stables.NativeCalls,Stables
 local records,enabled,running,draining={},false,false,false
+local behaviorEnabled=false
+local FollowHandoff
 local MARKER='bccStablesGeneration'
 local OBSERVER='bccStablesObserver'
 local function Timing(pattern,...)
@@ -79,6 +81,21 @@ end
 local function Check(source,context)
     return S.Foundation.CheckSession(source,context)
 end
+local function Distant(r,source)
+    local ped=GetPlayerPed(source)
+    if not Exists(ped) then return S.Err('player_unavailable','Current player required.') end
+    local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
+    if not a or not b or not Finite(a.x) or not Finite(a.y) or not Finite(a.z)
+        or not Finite(b.x) or not Finite(b.y) or not Finite(b.z) then return S.Err('invalid_position','Finite server positions required.') end
+    return S.Ok((a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2>10000)
+end
+
+local function AutomaticRelocation(id,source,context)
+    local reply=N.RelocateProof({generationId=id},source,context)
+    if reply.ok then reply.value.relocation=true end
+    return reply
+end
+
 local function Position(source)
     if GetPlayerRoutingBucket(source)~=0 then return S.Err('foreign_route','Calling requires the default world.') end
     local ped=GetPlayerPed(source)
@@ -169,7 +186,7 @@ local function Dispatch(p,source,context,handoff)
     local position=Position(source); if not position.ok then return position end
     if draining then return S.Err('native_calls_draining','Native dispatch is drained until resource restart.') end
     local r={id=id,context=context,position=position.value,candidates={},candidateCount=0,
-        started=GetGameTimer(),busy=true,phase='authorizing'}
+        started=GetGameTimer(),busy=true,phase='authorizing',nativeBehavior=behaviorEnabled}
     records[id]=r
     local ok,result=pcall(function()
         local uuidStarted=GetGameTimer()
@@ -268,7 +285,7 @@ function N.Bind(p,source,context)
         if r.cancelled or not running or not Candidate(r,e) or GetPlayerRoutingBucket(source)~=0 then
             return S.Err('stale_call','Session, route or entity changed during binding.')
         end
-        r.entity,r.netId=e,p.netId
+        r.entity,r.netId,r.horseId=e,p.netId,lease.value.horseId
         Entity(e).state:set(MARKER,r.id,true); Entity(e).state:set(OBSERVER,r.observerId,true)
         timing.validationMs=GetGameTimer()-timing.validationStarted
         local commitStarted=GetGameTimer()
@@ -284,7 +301,7 @@ function N.Bind(p,source,context)
         end
         timing.recheckMs=GetGameTimer()-recheckStarted
         r.phase,r.lastOwnerCheck='active',GetGameTimer()
-        return S.Ok({generationId=r.id,state='active',netId=r.netId,gameplayAvailable=false})
+        return S.Ok({generationId=r.id,state='active',netId=r.netId,nativeBehavior=r.nativeBehavior==true,gameplayAvailable=false})
     end)
     r.busy=false
     if not ok then result=S.Persistence.DatabaseError(result) end
@@ -295,6 +312,53 @@ function N.Bind(p,source,context)
     end
     return result
 end
+function N.StoreCheckPayload(p)
+    if type(p)~='table' or not S.Operations.IsUuid(p.generationId) or type(p.sequence)~='number'
+        or p.sequence%1~=0 or p.sequence<1 or type(p.occupied)~='boolean' then return false end
+    for k in pairs(p) do if k~='generationId' and k~='sequence' and k~='occupied' then return false end end
+    return true
+end
+
+function N.StoreCheckResult(p,source)
+    if not N.StoreCheckPayload(p) then return S.Err('invalid_input','Exact store occupancy result required.') end
+    local r=records[p.generationId]; local ticket=r and r.storeCheck
+    if not r or not ticket or ticket.sequence~=p.sequence or ticket.owner~=source or ticket.reply~=nil
+        or GetGameTimer()>ticket.expires or r.cancelled or not running
+        or r.phase~='active' or not Same(r) or NetworkGetEntityOwner(r.entity)~=source
+        or GetEntityRoutingBucket(r.entity)~=0 or GetPlayerRoutingBucket(source)~=0 then
+        return S.Err('stale_store_check','Store occupancy check is no longer current.')
+    end
+    ticket.reply=p.occupied
+    return S.Ok({recorded=true})
+end
+
+local function StoreOccupancy(r,source,context)
+    if r.busy then return S.Err('busy','Horse is busy.') end
+    r.busy=true
+    local ok,result=pcall(function()
+        if not Same(r) or GetEntityRoutingBucket(r.entity)~=0 then return S.Err('occupancy_unknown','Horse identity is unavailable.') end
+        local owner=NetworkGetEntityOwner(r.entity)
+        if type(owner)~='number' or owner<1 or GetPlayerRoutingBucket(owner)~=0 then return S.Err('occupancy_unknown','Current simulator is unavailable.') end
+        r.storeSequence=(r.storeSequence or 0)+1
+        local ticket={sequence=r.storeSequence,owner=owner,expires=GetGameTimer()+1500}
+        r.storeCheck=ticket
+        TriggerClientEvent('bcc-stables:call:store_check',owner,{generationId=r.id,observerId=r.observerId,
+            netId=r.netId,modelKey=r.modelKey,sequence=ticket.sequence})
+        while ticket.reply==nil and GetGameTimer()<ticket.expires and not r.cancelled do Wait(25) end
+        local checked=Check(source,context); if not checked.ok then return checked end
+        if r.cancelled or r.phase~='active' or not running or draining or records[r.id]~=r
+            or not Same(r) or GetEntityRoutingBucket(r.entity)~=0 or NetworkGetEntityOwner(r.entity)~=owner
+            or GetPlayerRoutingBucket(owner)~=0 or not S.Core.IsSessionCurrent(r.context) then
+            return S.Err('occupancy_unknown','Observer/session/control changed during the store check.')
+        end
+        if ticket.reply==true then return S.Err('horse_occupied','Dismount before storing this horse.') end
+        if ticket.reply~=false then return S.Err('occupancy_unknown','No current simulator occupancy result; horse retained.') end
+        return S.Ok(true)
+    end)
+    r.storeCheck=nil; r.busy=false
+    return ok and result or S.Err('occupancy_unknown','Store occupancy check failed; horse retained.')
+end
+
 function N.Store(p,source,context)
     if not Payload(p,false) then return S.Err('invalid_input','Only generationId is accepted.') end
     local checked=Check(source,context); if not checked.ok then return checked end
@@ -303,6 +367,9 @@ function N.Store(p,source,context)
     local r=records[p.generationId:lower()]
     if not r or r.context.characterId~=context.characterId:lower() then
         return S.Err('call_reconciliation_required','Live observer is absent; no entity will be deleted from a saved net ID.')
+    end
+    if r.phase=='active' and not r.cancelled and Same(r) then
+        local occupied=StoreOccupancy(r,source,context); if not occupied.ok then return occupied end
     end
     Cancel(r)
     local result=Cleanup(r)
@@ -340,6 +407,7 @@ function N.Tick()
                 local owned=lease.ok and S.OwnedHorses.GetKnown(lease.value.horseId,lease.value.operationId,r.context.source,r.context)
                 if not owned or not owned.ok then Cancel(r) end
             end
+            if not r.cancelled and r.phase=='active' and FollowHandoff then FollowHandoff(r) end
             if r.cancelled then Cleanup(r) end
         end
         end)
@@ -372,8 +440,16 @@ function N.Start()
     if StablesConfig.nativeCalls and StablesConfig.callPreparation~=true then
         return S.Err('config_error','nativeCalls requires callPreparation=true.')
     end
+    if StablesConfig.nativeBehavior~=nil and type(StablesConfig.nativeBehavior)~='boolean' then
+        return S.Err('config_error','nativeBehavior must be boolean when supplied.')
+    end
+    if StablesConfig.nativeBehavior==true and not StablesConfig.nativeCalls then
+        return S.Err('config_error','nativeBehavior requires nativeCalls=true.')
+    end
     enabled,running,draining=StablesConfig.nativeCalls,true,false
-    return S.Ok({ok=true,enabled=enabled,entitySpawning=enabled,storeAvailable=enabled,gameplayAvailable=false})
+    behaviorEnabled=StablesConfig.nativeBehavior==true
+    return S.Ok({ok=true,enabled=enabled,entitySpawning=enabled,storeAvailable=enabled,
+        nativeBehaviorEnabled=behaviorEnabled,gameplayAvailable=false})
 end
 -- Console-only read probe. Fixed sample counts, no arbitrary SQL or mutations.
 local probeBusy=false
@@ -459,14 +535,16 @@ end
 function N.Install()
     for _,entry in ipairs({{'dispatch',N.Dispatch},{'bind',N.Bind},{'store',N.Store},
         {'request',N.Request,true},{'store_current',N.StoreCurrent,true},{'movement_proof',N.MovementProof,true},
-        {'whistle',N.Whistle,true},{'whistle_claim',N.WhistleClaim,false}}) do
+        {'whistle',N.Whistle,false},{'whistle_claim',N.WhistleClaim,false},{'whistle_done',N.WhistleDone,false},{'store_check_result',N.StoreCheckResult,false},{'relocate_proof',N.RelocateProof,false}}) do
         local action,empty=entry[1],entry[3]
         local registered=S.Core.Call('RegisterRpc','stables.horses.call.'..action..'.v1',entry[2],{
-            contract=1,direction='client_to_server',requireCharacter=true,windowMs=2000,maxCalls=2,
+            contract=1,direction='client_to_server',requireCharacter=action~='store_check_result',windowMs=2000,maxCalls=2,
             maxPayloadBytes=empty and 16 or 192,maxDepth=empty and 1 or 2,maxNodes=empty and 2 or 6,
             validatePayload=function(p)
                 if empty then return type(p)=='table' and next(p)==nil end
-                if action=='whistle_claim' then return N.WhistlePayload(p) end
+                if action=='store_check_result' then return N.StoreCheckPayload(p) end
+                if action=='whistle' then return N.WhistleInput(p) end
+                if action=='whistle_claim' or action=='whistle_done' then return N.WhistlePayload(p) end
                 return Payload(p,action=='bind')
             end})
         if not registered.ok then return registered end
@@ -513,6 +591,16 @@ function N.Install()
                 v.liveObserver=r~=nil; v.exists=r and Same(r) or false
                 v.netId=r and r.netId or nil
                 v.networkOwner=r and Same(r) and NetworkGetEntityOwner(r.entity) or nil
+                local ticket=r and r.whistle
+                if ticket then
+                    local now=GetGameTimer()
+                    local expired=(ticket.followUntil and now>=ticket.followUntil) or (not ticket.claimed and now>ticket.expires)
+                    v.movementTicket={sequence=ticket.sequence,mode=ticket.mode,simulator=ticket.owner,
+                        state=ticket.completed and 'ended' or expired and 'expired' or ticket.claimed and 'claimed' or 'pending',
+                        normalFollow=ticket.normalFollow==true,
+                        claimRemainingMs=math.max(0,ticket.expires-now),
+                        followRemainingMs=ticket.followUntil and math.max(0,ticket.followUntil-now) or nil}
+                end
                 return S.Ok(v)
             end)
             print('[bcc-stables:native] '..json.encode(ok and result or S.Err('native_error','Native inspection failed.')))
@@ -522,7 +610,7 @@ function N.Install()
     AddEventHandler('playerDropped',function()
         for _,r in pairs(records) do if r.context.source==source then Cancel(r) end end
     end)
-    return S.Ok({routes=8})
+    return S.Ok({routes=11})
 end
 function N.Run()
     CreateThread(function()
@@ -797,7 +885,7 @@ end
 
 -- Player controls consume only the server's current owned selection/call slot.
 -- A successful RPC never replaces the single authoritative create instruction.
-function N.Request(p,source,context)
+local function RequestSelected(p,source,context,expected)
     if type(p)~='table' or next(p)~=nil then return S.Err('invalid_input','Call request accepts no fields.') end
     local started=GetGameTimer()
     local checked=Check(source,context); if not checked.ok then return checked end
@@ -816,7 +904,7 @@ function N.Request(p,source,context)
     if draining then return S.Err('native_calls_draining','Native dispatch is drained until resource restart.') end
     local preparationStarted=GetGameTimer()
     local preparationStages={}
-    local prepared=S.Calls.PlanForDispatch(source,context,preparationStages)
+    local prepared=S.Calls.PlanForDispatch(source,context,preparationStages,expected)
     if not prepared.ok then return prepared end
     local preparedAt=GetGameTimer()
     prepared.value.observerId=observer:lower()
@@ -831,6 +919,30 @@ function N.Request(p,source,context)
     end
     return dispatched
 end
+function N.Request(p,source,context)
+    local result=RequestSelected(p,source,context)
+    -- The ordinary empty-slot call keeps its accepted transport budget. Only
+    -- an existing-call refusal performs the additional distance lookup.
+    if result.ok or result.code~='call_cleanup_required' then return result end
+    local checked=Check(source,context); if not checked.ok then return checked end
+    local saved=S.CallRepository.Get(context.characterId:lower()); if not saved.ok then return saved end
+    local v=saved.value; local r=v.generationId and records[v.generationId]
+    if v.state~='active' or not r or r.cancelled or r.phase~='active' or not Same(r)
+        or r.context.source~=source or r.context.sessionId~=context.sessionId then return result end
+    local far=Distant(r,source); if not far.ok then return far end
+    if not far.value then
+        -- Reuse the existing fresh authorization/ticket path. An RPC success
+        -- requests approach only; it never creates another physical horse.
+        local approached=N.Whistle({mode='approach'},source,context)
+        if approached.ok and not approached.value.relocation then
+            approached.value.state='approach_requested'
+            approached.value.entitySpawning=false
+        end
+        return approached
+    end
+    return AutomaticRelocation(r.id,source,context)
+end
+
 function N.StoreCurrent(p,source,context)
     if type(p)~='table' or next(p)~=nil then return S.Err('invalid_input','Current store accepts no fields.') end
     local checked=Check(source,context); if not checked.ok then return checked end
@@ -868,14 +980,71 @@ function N.MovementProof(p,source,context)
             or not Finite(b.x) or not Finite(b.y) or not Finite(b.z)
             or (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2>64 then return S.Err('too_far','Stand within eight meters of the horse.') end
 
+        local ticket=r.whistle
+        local movementIdle=not ticket or ticket.completed or GetGameTimer()>(ticket.followUntil
+            or (ticket.mode=='approach' and ticket.expires+20000) or ticket.expires)
         r.movementProof=true -- Diagnostic only; never used to grant gameplay authority.
         return S.Ok({generationId=r.id,observerId=r.observerId,netId=r.netId,modelKey=r.modelKey,
-            state='active',movementProof=true,gameplayAvailable=false})
+            state='active',movementProof=true,movementIdle=movementIdle==true,nativeBehavior=r.nativeBehavior==true,gameplayAvailable=false})
     end)
     r.busy=false
     return ok and result or S.Persistence.DatabaseError(result)
 end
 
+-- Internal read-only care observation. No caller-provided entity identity is
+-- trusted; fresh canonical ownership precedes the runtime-only snapshot.
+local function CareView(r,source,context)
+    if not r or r.context.source~=source or r.context.sessionId~=context.sessionId
+        or r.context.characterId~=context.characterId:lower() or r.busy or r.cancelled
+        or not running or not enabled or draining or r.phase~='active' or not Same(r)
+        or not S.Core.IsSessionCurrent(r.context) or GetPlayerRoutingBucket(source)~=0 or GetEntityRoutingBucket(r.entity)~=0 then
+        return S.Err('care_target_unavailable','Current owned active observer required.')
+    end
+    local owner=NetworkGetEntityOwner(r.entity)
+    local ped=GetPlayerPed(source)
+    local simulatorPed=type(owner)=='number' and owner%1==0 and owner>0 and GetPlayerPed(owner)
+    if not simulatorPed or not Exists(simulatorPed) or not Exists(ped) or GetPlayerRoutingBucket(owner)~=0 then
+        return S.Err('care_simulator_unavailable','Current simulator and owner ped required.')
+    end
+    local targetNet,simulatorNet=NetworkGetNetworkIdFromEntity(ped),NetworkGetNetworkIdFromEntity(simulatorPed)
+    if type(targetNet)~='number' or targetNet%1~=0 or targetNet<1 or type(simulatorNet)~='number' or simulatorNet%1~=0 or simulatorNet<1 then
+        return S.Err('care_target_unavailable','Network player identities required.')
+    end
+    local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
+    if not a or not b or not Finite(a.x) or not Finite(a.y) or not Finite(a.z)
+        or not Finite(b.x) or not Finite(b.y) or not Finite(b.z) then return S.Err('care_target_unavailable','Finite server positions required.') end
+    local ticket=r.whistle
+    local movementIdle=not ticket or ticket.completed or GetGameTimer()>(ticket.followUntil
+        or (ticket.mode=='approach' and ticket.expires+20000) or ticket.expires)
+    return S.Ok({generationId=r.id,observerId=r.observerId,horseId=r.horseId,netId=r.netId,modelKey=r.modelKey,
+        ownerSource=source,targetNetId=targetNet,simulatorPed=simulatorPed,simulatorNetId=simulatorNet,networkOwner=owner,
+        movementSequence=ticket and ticket.sequence or 0,movementIdle=movementIdle==true,
+        distance=math.sqrt((a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2)})
+end
+function N.CareObserver(source,context)
+    local checked=Check(source,context); if not checked.ok then return checked end
+    local saved=S.CallRepository.Get(context.characterId:lower()); if not saved.ok then return saved end
+    local v=saved.value; local r=v.generationId and records[v.generationId]
+    if v.state~='active' or not r then return S.Err('care_target_unavailable','Active call required.') end
+    local owned=S.OwnedHorses.GetKnown(v.horseId,v.operationId,source,context); if not owned.ok then return owned end
+    checked=Check(source,context); if not checked.ok then return checked end
+    return CareView(r,source,context)
+end
+function N.RecheckCareObserver(snapshot,source,context)
+    local checked=Check(source,context); if not checked.ok then return checked end
+    local current=CareView(records[snapshot.generationId],source,context); if not current.ok then return current end
+    for _,key in ipairs({'generationId','observerId','horseId','netId','modelKey','ownerSource','targetNetId','simulatorPed','simulatorNetId','networkOwner','movementSequence'}) do
+        if current.value[key]~=snapshot[key] then return S.Err('care_observation_stale','Care observer/simulator identity changed.') end
+    end
+    return current
+end
+
+
+function N.WhistleInput(p)
+    if type(p)~='table' then return false end
+    for k in pairs(p) do if k~='mode' then return false end end
+    return p.mode==nil or p.mode=='approach' or p.mode=='follow' or p.mode=='stop' or p.mode=='toggle_follow'
+end
 
 function N.WhistlePayload(p)
     if type(p)~='table' or not S.Operations.IsUuid(p.generationId)
@@ -890,22 +1059,74 @@ local function WhistleLive(r)
         and Same(r) and GetEntityRoutingBucket(r.entity)==0
 end
 
+-- Observe control changes and renew normal Follow using the existing tick, without SQL.
+-- Every replacement still redeems a fresh canonical claim on the new simulator.
+FollowHandoff=function(r)
+    local ticket=r.whistle; local now=GetGameTimer()
+    if not ticket or ticket.mode~='follow' or ticket.completed or not ticket.followUntil
+        or now>=ticket.followUntil or not WhistleLive(r) then return end
+    local owner=NetworkGetEntityOwner(r.entity)
+    local renew=ticket.normalFollow==true and ticket.claimed and ticket.followUntil-now<=5000
+    if (owner==ticket.owner and not renew) or type(owner)~='number' or owner<1 or GetPlayerRoutingBucket(owner)~=0
+        or now-(r.lastFollowHandoff or -1000)<500 then return end
+    if GetPlayerPed(r.context.source)~=ticket.target or not Exists(ticket.target)
+        or NetworkGetNetworkIdFromEntity(ticket.target)~=ticket.targetNet then return end
+    local far=Distant(r,r.context.source); if not far.ok or far.value then return end
+    TriggerClientEvent('bcc-stables:call:whistle_cancel',ticket.owner,
+        {generationId=r.id,observerId=r.observerId,sequence=ticket.sequence})
+    r.whistleSequence=(r.whistleSequence or 0)+1
+    r.lastFollowHandoff=now
+    local deadline=renew and now+30000 or ticket.followUntil
+    r.whistle={sequence=r.whistleSequence,mode='follow',owner=owner,target=ticket.target,targetNet=ticket.targetNet,
+        expires=math.min(now+5000,deadline),followUntil=deadline,normalFollow=ticket.normalFollow==true}
+
+    TriggerClientEvent('bcc-stables:call:whistle',owner,{generationId=r.id,sequence=r.whistleSequence})
+end
+
 -- Only the character owner can request movement. The simulator may only redeem
 -- a short-lived server ticket for that exact live observer and target ped.
 function N.Whistle(p,source,context)
-    if type(p)~='table' or next(p)~=nil then return S.Err('invalid_input','Whistle accepts no fields.') end
+    if not N.WhistleInput(p) then return S.Err('invalid_input','Whistle accepts only approach, follow, stop or toggle_follow mode.') end
+    local mode=p.mode or 'approach'
     local checked=Check(source,context); if not checked.ok then return checked end
     local saved=S.CallRepository.Get(context.characterId:lower()); if not saved.ok then return saved end
     local v=saved.value; local r=v.generationId and records[v.generationId]
     if v.state~='active' or not r or r.context.source~=source or r.context.sessionId~=context.sessionId
         or r.context.characterId~=context.characterId:lower() or not WhistleLive(r) then return S.Err('stale_call','Current owned observer required.') end
     if r.busy then return S.Err('busy','Horse is busy.') end
-    if GetGameTimer()-(r.lastWhistle or -2000)<1500 then return S.Err('rate_limited','Whistle cooldown.') end
+    if mode=='toggle_follow' then
+        local ticket=r.whistle
+        local following=ticket and not ticket.completed and ticket.mode=='follow' and
+            ((ticket.claimed and ticket.followUntil and GetGameTimer()<ticket.followUntil)
+                or (not ticket.claimed and GetGameTimer()<=ticket.expires))
+        mode=following and 'stop' or 'follow'
+    end
+    if mode~='stop' and GetGameTimer()-(r.lastWhistle or -2000)<1500 then return S.Err('rate_limited','Whistle cooldown.') end
+    if mode=='approach' then
+        local far=Distant(r,source); if not far.ok then return far end
+        if far.value then return AutomaticRelocation(r.id,source,context) end
+    end
     r.busy=true
     local ok,result=pcall(function()
         local owned=S.OwnedHorses.GetKnown(v.horseId,v.operationId,source,context); if not owned.ok then return owned end
         checked=Check(source,context); if not checked.ok then return checked end
         if not WhistleLive(r) then return S.Err('stale_call','Observer changed.') end
+        if mode=='stop' then
+            local old=r.whistle
+            if not old then return S.Ok({generationId=r.id,mode='stop',state='stopped',relayed=true,gameplayAvailable=false}) end
+            local owner=NetworkGetEntityOwner(r.entity)
+            local ped=GetPlayerPed(source)
+            if type(owner)~='number' or owner<1 or GetPlayerRoutingBucket(owner)~=0 or not Exists(ped) then
+                return S.Err('control_unavailable','No eligible current simulator/target.')
+            end
+            local targetNet=NetworkGetNetworkIdFromEntity(ped)
+            if type(targetNet)~='number' or targetNet<1 then return S.Err('player_unavailable','Network player ped required.') end
+            TriggerClientEvent('bcc-stables:call:whistle_cancel',old.owner,{generationId=r.id,observerId=r.observerId,sequence=old.sequence})
+            r.whistleSequence=(r.whistleSequence or 0)+1
+            r.whistle={sequence=r.whistleSequence,mode='stop',owner=owner,target=ped,targetNet=targetNet,expires=GetGameTimer()+5000}
+            TriggerClientEvent('bcc-stables:call:whistle',owner,{generationId=r.id,sequence=r.whistleSequence})
+            return S.Ok({generationId=r.id,mode='stop',state='stop_requested',networkOwner=owner,relayed=true,gameplayAvailable=false})
+        end
         local ped=GetPlayerPed(source); if not Exists(ped) then return S.Err('player_unavailable','Current player required.') end
         local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
         if not a or not b or not Finite(a.x) or not Finite(a.y) or not Finite(a.z)
@@ -918,9 +1139,10 @@ function N.Whistle(p,source,context)
         if r.whistle then TriggerClientEvent('bcc-stables:call:whistle_cancel',r.whistle.owner,{generationId=r.id,observerId=r.observerId,sequence=r.whistle.sequence}) end
         r.whistleSequence=(r.whistleSequence or 0)+1
         r.lastWhistle=GetGameTimer()
-        r.whistle={sequence=r.whistleSequence,owner=owner,target=ped,targetNet=targetNet,expires=GetGameTimer()+5000}
+        r.whistle={sequence=r.whistleSequence,mode=mode,owner=owner,target=ped,targetNet=targetNet,expires=GetGameTimer()+5000,
+            normalFollow=mode=='follow' and p.mode=='toggle_follow' and r.nativeBehavior==true}
         TriggerClientEvent('bcc-stables:call:whistle',owner,{generationId=r.id,sequence=r.whistleSequence})
-        return S.Ok({generationId=r.id,networkOwner=owner,relayed=true,gameplayAvailable=false})
+        return S.Ok({generationId=r.id,mode=mode,networkOwner=owner,relayed=true,gameplayAvailable=false})
     end)
     r.busy=false
     return ok and result or S.Persistence.DatabaseError(result)
@@ -944,9 +1166,130 @@ function N.WhistleClaim(p,source,context)
             or NetworkGetEntityOwner(r.entity)~=source or GetPlayerPed(r.context.source)~=ticket.target
             or NetworkGetNetworkIdFromEntity(ticket.target)~=ticket.targetNet then return S.Err('stale_whistle','Task identity/control changed.') end
         ticket.claimed=true
+        if ticket.mode=='follow' then
+            ticket.followUntil=ticket.followUntil or (GetGameTimer()+30000)
+            ticket.claimSessionId=context.sessionId
+            ticket.claimCharacterId=context.characterId
+        end
         return S.Ok({generationId=r.id,observerId=r.observerId,sequence=ticket.sequence,netId=r.netId,
-            modelKey=r.modelKey,targetNetId=ticket.targetNet,ownerSource=r.context.source})
+            modelKey=r.modelKey,mode=ticket.mode,targetNetId=ticket.targetNet,ownerSource=r.context.source,normalFollow=ticket.normalFollow==true,
+            followMs=ticket.mode=='follow' and math.max(1,ticket.followUntil-GetGameTimer()) or nil})
     end)
     r.busy=false
     return ok and result or S.Persistence.DatabaseError(result)
+end
+
+
+-- Completion can only revoke this simulator's claimed follow intent. It grants
+-- no task/entity authority and performs no persistence or canonical reads.
+-- Accept the original simulator after control migrates: a late report still
+-- cannot revoke a newer ticket, even when that ticket uses the same generation.
+function N.WhistleDone(p,source,context)
+    if not N.WhistlePayload(p) then return S.Err('invalid_input','Exact whistle ticket required.') end
+    local checked=Check(source,context); if not checked.ok then return checked end
+    local r=records[p.generationId]; local ticket=r and r.whistle
+    if not r or not ticket or not ticket.claimed or ticket.mode~='follow'
+        or ticket.sequence~=p.sequence or ticket.owner~=source
+        or ticket.claimSessionId~=context.sessionId or ticket.claimCharacterId~=context.characterId
+        or not WhistleLive(r) then return S.Err('stale_whistle','Claimed follow ticket is unavailable.') end
+    if not ticket.completed and GetGameTimer()<ticket.followUntil and NetworkGetEntityOwner(r.entity)~=ticket.owner then
+        return S.Err('follow_handoff_pending','Control changed; original follow deadline retained for handoff.')
+    end
+    local replayed=ticket.completed==true
+    ticket.completed=true
+    return S.Ok({generationId=r.id,sequence=ticket.sequence,state='ended',replayed=replayed})
+end
+
+
+-- Controlled, explicitly retried relocation only. Durable old/new generation
+-- fences remain in the existing call repositories; this correlation is process
+-- local and never resumes a replacement automatically after resource restart.
+local relocations={}
+function N.RelocateProof(p,source,context)
+    if not Payload(p,false) then return S.Err('invalid_input','Only the original generationId is accepted.') end
+    local checked=Check(source,context); if not checked.ok then return checked end
+    if not enabled or not running or draining then return S.Err('native_calls_disabled','Relocation requires running native calls.') end
+    if GetResourceState('feather-toolkit')~='started' then return S.Err('dependency_unavailable','Toolkit is required before relocation cleanup.') end
+    context=S.Copy(context)
+    local id=p.generationId:lower()
+    local entry=relocations[id]
+    if entry and (entry.context.characterId~=context.characterId:lower() or entry.context.source~=source
+        or entry.context.sessionId~=context.sessionId) then return S.Err('stale_call','Original character/session required.') end
+    if entry and entry.busy then return S.Err('busy','Relocation is already in progress.') end
+    if entry and entry.result then
+        local reply=S.Copy(entry.result)
+        if reply.ok then reply.value.replayed=true end
+        return reply
+    end
+    if not entry then
+        local saved=S.CallRepository.Get(context.characterId:lower(),id); if not saved.ok then return saved end
+        local v=saved.value; local r=records[id]
+        if v.state~='active' or not r or r.context.source~=source or r.context.sessionId~=context.sessionId
+            or r.context.characterId~=context.characterId:lower() or not Same(r) or r.cancelled or r.phase~='active' then
+            return S.Err('relocation_recovery_required','Original current active observer required; no automatic replacement.')
+        end
+        if r.busy then return S.Err('busy','Horse is busy.') end
+        checked=Check(source,context); if not checked.ok then return checked end
+        local ped=GetPlayerPed(source); if not Exists(ped) then return S.Err('player_unavailable','Current player required.') end
+        local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
+        if not a or not b or not Finite(a.x) or not Finite(a.y) or not Finite(a.z)
+            or not Finite(b.x) or not Finite(b.y) or not Finite(b.z) then return S.Err('invalid_position','Finite server positions required.') end
+        if (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2<=10000 then return S.Err('too_near','Stand more than 100 meters from the horse.') end
+        local owned=S.OwnedHorses.GetKnown(v.horseId,v.operationId,source,context); if not owned.ok then return owned end
+        checked=Check(source,context); if not checked.ok then return checked end
+        if not Same(r) or r.cancelled or r.phase~='active' or GetEntityRoutingBucket(r.entity)~=0 then
+            return S.Err('stale_call','Original observer changed.')
+        end
+        local count=0
+        for key,value in pairs(relocations) do
+            if not value.busy and ((value.result and GetGameTimer()-(value.finished or 0)>60000)
+                or not S.Core.IsSessionCurrent(value.context)) then relocations[key]=nil else count=count+1 end
+        end
+        if count>=32 then return S.Err('busy','Relocation proof receipt limit reached; try later.') end
+        -- A simultaneous request can have installed a correlation during fresh
+        -- ownership I/O. Never overwrite its in-flight or completed result.
+        if relocations[id] then return S.Err('busy','Relocation was already requested; inspect before retrying.') end
+        entry={context=context,original=S.Copy(v),phase='cleanup',busy=false}
+        relocations[id]=entry
+    end
+    entry.busy=true
+    local ok,result=pcall(function()
+        checked=Check(source,context); if not checked.ok then return checked end
+        if not running or not enabled or draining then return S.Err('native_calls_disabled','Relocation is unavailable.') end
+        if entry.phase=='cleanup' then
+            local r=records[id]
+            if r and not r.cancelled and r.phase=='active' and Same(r) then
+                local ped=GetPlayerPed(source)
+                if not Exists(ped) then return S.Err('player_unavailable','Current player required.') end
+                local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
+                if not a or not b or not Finite(a.x) or not Finite(a.y) or not Finite(a.z)
+                    or not Finite(b.x) or not Finite(b.y) or not Finite(b.z) then return S.Err('invalid_position','Finite server positions required.') end
+                if (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2<=10000 then return S.Err('too_near','Horse is nearby; no relocation cleanup started.') end
+            end
+        end
+        local stored=N.Store({generationId=id},source,context)
+        if not stored.ok then
+            if stored.code=='cleanup_pending' then
+                entry.phase='cleanup_pending'
+                return S.Ok({state='cleanup_pending',originalGenerationId=id,retryRequired=true,gameplayAvailable=false})
+            end
+            return stored
+        end
+        if stored.value.state~='released' then return S.Err('relocation_recovery_required','Old cleanup is not confirmed.') end
+        entry.phase='replacement_attempted' -- Never retry unknown submission.
+        local replacement=RequestSelected({},source,context,entry.original)
+        if not replacement.ok then return replacement end
+        return S.Ok({state='replacement_requested',originalGenerationId=id,generationId=replacement.value.generationId,
+            horseId=entry.original.horseId,replayed=false,gameplayAvailable=false})
+    end)
+    entry.busy=false
+    if not ok then result=S.Persistence.DatabaseError(result) end
+    if not result.ok or result.value.state=='replacement_requested' then
+        -- Occupancy/unknown reports leave the old active call intact and may be
+        -- retried explicitly; attempted replacement outcomes are terminal here.
+        if entry.phase=='replacement_attempted' or result.ok then
+            entry.result=S.Copy(result); entry.finished=GetGameTimer()
+        end
+    end
+    return result
 end

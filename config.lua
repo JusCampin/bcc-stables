@@ -21,6 +21,9 @@ StablesConfig = {
     callPreparation = false,
     -- Controlled native call/bind/store bridge; keep false until explicitly tested.
     nativeCalls = false,
+    -- After verified binding, enable basic riding/companion whistles automatically.
+    -- Still controlled/invincible; full gameplay remains unavailable.
+    nativeBehavior = false,
     -- Manual publication first; automatic polling is independently opt-in.
     outbox = { enabled = false, automatic = false },
     -- Console-only canonical Assets fixture; creates a durable test asset/audit.

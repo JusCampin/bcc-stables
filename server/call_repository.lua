@@ -45,6 +45,10 @@ local function Transaction(characterId, body, missingCode)
             result = missingCode and S.Err(missingCode,'Call generation was not found.')
                 or S.Err('selection_required', 'Select an owned horse first.'); return false
         end
+        if S.CareRepository then
+            local care=S.CareRepository.CheckCharacter(tx,characterId)
+            if not care.ok then result=care; return false end
+        end
         result = body(tx, stable); return result.ok == true
     end)
     if not ok then return S.Persistence.DatabaseError(committed) end

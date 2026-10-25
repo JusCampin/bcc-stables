@@ -43,6 +43,13 @@ local function fixture()
     e.TriggerClientEvent=function(name,source,payload)
         m.events[#m.events+1]={name=name,source=source,payload=S.Copy(payload)}
         if name=='bcc-stables:call:create' then m.instruction=payload end
+        if name=='bcc-stables:call:store_check' and not m.noStoreReport then
+            if m.storeReporter then m.storeReporter(source,payload)
+            else
+                local result=m.n.StoreCheckResult({generationId=payload.generationId,sequence=payload.sequence,occupied=m.occupied==true},source)
+                assert(result.ok)
+            end
+        end
     end
     e.AddEventHandler=function(name,fn) m.handlers[name]=fn end
     e.RegisterCommand=function(name,fn) m.handlers[name]=fn end
@@ -128,6 +135,20 @@ local function fixture()
     return m
 end
 local function active() local m=fixture(); assert(m.dispatch().ok); m.horse(); assert(m.bind().ok); return m end
+
+test('read-only care observer uses fresh owned active identity and follows simulator migration',function()
+    local m=active(); local read=m.n.CareObserver(1,m.context)
+    assert(read.ok and read.value.horseId==m.t.horseId and read.value.networkOwner==1 and not m.deletes)
+    assert(m.n.RecheckCareObserver(read.value,1,m.context).ok)
+    m.entities[20].owner=2
+    assert(m.n.RecheckCareObserver(read.value,1,m.context).code=='care_observation_stale')
+    assert(m.n.CareObserver(1,m.context).value.networkOwner==2 and not m.deletes)
+end)
+test('care observer refuses canonical ownership or entity identity loss',function()
+    local m=active(); m.asset.owner.holderId='40000000-0000-4000-8000-000000000004'
+    assert(not m.n.CareObserver(1,m.context).ok)
+    m=active(); m.entities[20].state.bccStablesGeneration='changed'; assert(not m.n.CareObserver(1,m.context).ok)
+end)
 
 test('abort during observer UUID lookup defeats observed prepared handoff',function()
     local m=fixture(); local once=false
@@ -1184,9 +1205,9 @@ test('store cancels delegated ticket and prevents delayed task claim',function()
     assert(cancelled)
 end)
 
-test('whistle refuses far target and malformed task ticket',function()
+test('follow whistle refuses far target and malformed task ticket',function()
     local m=active(); m.entities[10].pos.x=200
-    assert(m.n.Whistle({},1,m.context).code=='too_far')
+    assert(m.n.Whistle({mode='follow'},1,m.context).code=='too_far')
     assert(m.n.WhistleClaim({generationId=m.id,sequence=1,netId=71},1,m.context).code=='invalid_input')
 end)
 
@@ -1200,4 +1221,646 @@ test('whistle claim rechecks canonical ownership and current character incarnati
     assert(m.n.WhistleClaim(ticket,1,m.context).code=='stale_whistle')
 end)
 
+
+test('follow relay mode is server ticket evidence and cannot be changed by claimant',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local p=m.events[#m.events].payload
+    assert(not m.n.WhistleClaim({generationId=p.generationId,sequence=p.sequence,mode='stop'},1,m.context).ok)
+    local claim=m.n.WhistleClaim(p,1,m.context)
+    assert(claim.ok and claim.value.mode=='follow')
+end)
+
+test('follow relay stop targets new simulator and invalidates original ticket',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local original=m.events[#m.events].payload
+    m.entities[20].owner=2
+    local stop=m.n.Whistle({mode='stop'},1,m.context)
+    assert(stop.ok and stop.value.networkOwner==2 and stop.value.mode=='stop')
+    local event=m.events[#m.events]; assert(event.source==2 and event.name=='bcc-stables:call:whistle')
+    assert(m.n.WhistleClaim(original,1,m.context).code=='stale_whistle')
+    m.S.Foundation.CheckSession=function(source) return (source==1 or source==2) and m.S.Ok(true) or m.S.Err('stale_session','test') end
+    local claim=m.n.WhistleClaim(event.payload,2,m.context); assert(claim.ok and claim.value.mode=='stop')
+end)
+
+test('follow relay stop is idempotent without work and bypasses movement distance and cooldown',function()
+    local m=active(); assert(m.n.Whistle({mode='stop'},1,m.context).value.state=='stopped')
+    assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    m.entities[10].pos.x=200
+    assert(m.n.Whistle({mode='stop'},1,m.context).ok)
+end)
+
+test('follow mode refuses unknown mode and client supplied task settings before delegation',function()
+    local m=active()
+    assert(not m.n.Whistle({mode='follow',speed=3},1,m.context).ok)
+    assert(not m.n.Whistle({mode='teleport'},1,m.context).ok)
+    local route=m.routes['stables.horses.call.whistle.v1']
+    assert(route.options.validatePayload({}) and route.options.validatePayload({mode='follow'}))
+    assert(not route.options.validatePayload({mode='follow',netId=71}))
+end)
+
+test('long whistle toggle starts follow then stops pending ticket without movement cooldown',function()
+    local m=active(); local first=m.n.Whistle({mode='toggle_follow'},1,m.context)
+    assert(first.ok and first.value.mode=='follow')
+    local original=m.events[#m.events].payload
+    local stop=m.n.Whistle({mode='toggle_follow'},1,m.context)
+    assert(stop.ok and stop.value.mode=='stop')
+    assert(m.n.WhistleClaim(original,1,m.context).code=='stale_whistle')
+end)
+
+test('long whistle toggle resolves claimed follow and expired follow on server clock',function()
+    local m=active(); assert(m.n.Whistle({mode='toggle_follow'},1,m.context).ok)
+    local p=m.events[#m.events].payload; assert(m.n.WhistleClaim(p,1,m.context).ok)
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='stop')
+    m=active(); assert(m.n.Whistle({mode='toggle_follow'},1,m.context).ok)
+    p=m.events[#m.events].payload; assert(m.n.WhistleClaim(p,1,m.context).ok)
+    m.time=m.time+30001
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='follow')
+end)
+
+test('short approach supersedes server follow and next long whistle starts follow again',function()
+    local m=active(); assert(m.n.Whistle({mode='toggle_follow'},1,m.context).ok)
+    m.time=m.time+1501
+    assert(m.n.Whistle({mode='approach'},1,m.context).value.mode=='approach')
+    m.time=m.time+1501
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='follow')
+end)
+
+test('mounted store refuses before cancel intent deletion or projection changes',function()
+    local m=active(); m.occupied=true
+    assert(m.store().code=='horse_occupied' and m.get().value.state=='active' and not m.deletes)
+    for _,event in ipairs(m.events) do assert(event.name~='bcc-stables:call:cancel') end
+    m.occupied=false; assert(m.store().ok and m.get().value.state=='empty')
+end)
+
+test('missing occupancy report times out and retains active call',function()
+    local m=active(); m.noStoreReport=true; local time=m.time
+    assert(m.store().code=='occupancy_unknown' and m.time-time==1500)
+    assert(m.get().value.state=='active' and not m.deletes)
+end)
+
+test('occupancy reports authenticate simulator sequence shape and one use',function()
+    local m=active()
+    m.storeReporter=function(source,p)
+        assert(m.n.StoreCheckResult({generationId=p.generationId,sequence=p.sequence,occupied='false'},source).code=='invalid_input')
+        assert(m.n.StoreCheckResult({generationId=p.generationId,sequence=p.sequence,occupied=false},99).code=='stale_store_check')
+        assert(m.n.StoreCheckResult({generationId=p.generationId,sequence=p.sequence+1,occupied=false},source).code=='stale_store_check')
+        local report={generationId=p.generationId,sequence=p.sequence,occupied=false}
+        assert(m.n.StoreCheckResult(report,source).ok)
+        assert(m.n.StoreCheckResult(report,source).code=='stale_store_check')
+    end
+    assert(m.store().ok)
+end)
+
+test('migration after empty observation refuses cleanup and leaves active generation',function()
+    local m=active()
+    m.storeReporter=function(source,p)
+        assert(m.n.StoreCheckResult({generationId=p.generationId,sequence=p.sequence,occupied=false},source).ok)
+        m.entities[20].owner=2
+    end
+    assert(m.store().code=='occupancy_unknown' and m.get().value.state=='active' and not m.deletes)
+end)
+
+test('occupied migrated simulator refuses store without requiring that character to own the horse',function()
+    local m=active(); m.entities[20].owner=2; m.occupied=true
+    assert(m.store().code=='horse_occupied' and not m.deletes)
+    local route=m.routes['stables.horses.call.store_check_result.v1']
+    assert(route.options.requireCharacter==false)
+end)
+
+test('occupancy recovery still permits empty cleanup after native calls are disabled',function()
+    local m=active(); m.env.StablesConfig.nativeCalls=false; assert(m.n.Start().ok)
+    assert(m.store().ok and m.get().value.state=='empty')
+end)
+
+test('old occupancy report cannot satisfy a later store request',function()
+    local m=active(); local old
+    m.storeReporter=function(_,p) old=p end
+    assert(m.store().code=='occupancy_unknown')
+    m.storeReporter=function(source,p)
+        assert(m.n.StoreCheckResult({generationId=old.generationId,sequence=old.sequence,occupied=false},source).code=='stale_store_check')
+        assert(m.n.StoreCheckResult({generationId=p.generationId,sequence=p.sequence,occupied=false},source).ok)
+    end
+    assert(m.store().ok)
+end)
+
+test('overlapping manual store cannot cancel an occupancy check in progress',function()
+    local m=active()
+    m.storeReporter=function(source,p)
+        assert(m.store().code=='busy' and not m.deletes)
+        assert(m.n.StoreCheckResult({generationId=p.generationId,sequence=p.sequence,occupied=false},source).ok)
+    end
+    assert(m.store().ok)
+end)
+
+test('distant relocation releases exact old generation before requesting same horse replacement',function()
+    local m=active(); m.entities[10].pos.x=200
+    local result=m.n.RelocateProof({generationId=m.id},1,m.context)
+    assert(result.ok,tostring(result.code))
+    assert(result.value.state=='replacement_requested' and result.value.generationId~=m.id)
+    assert(result.value.horseId==m.t.horseId and m.deletes==1 and not m.entities[20].exists)
+    assert(m.get().value.generationId==result.value.generationId and m.get().value.state=='submitting')
+end)
+
+
+local function createCount(m)
+    local n=0; for _,event in ipairs(m.events) do if event.name=='bcc-stables:call:create' then n=n+1 end end
+    return n
+end
+
+test('relocation near threshold and malformed positions cannot delete or replace',function()
+    for _,x in ipairs({103,0/0}) do
+        local m=active(); m.entities[10].pos.x=x
+        assert(not m.n.RelocateProof({generationId=m.id},1,m.context).ok and not m.deletes and createCount(m)==1)
+    end
+    local m=active(); assert(m.n.RelocateProof({generationId=m.id,model='other'},1,m.context).code=='invalid_input')
+end)
+
+test('occupied or unknown relocation retains original generation until explicit retry',function()
+    for _,mode in ipairs({'occupied','unknown'}) do
+        local m=active(); m.entities[10].pos.x=200
+        m.occupied=mode=='occupied'; m.noStoreReport=mode=='unknown'
+        assert(not m.n.RelocateProof({generationId=m.id},1,m.context).ok and not m.deletes and createCount(m)==1)
+        assert(m.get().value.generationId==m.id and m.get().value.state=='active')
+        m.occupied=false; m.noStoreReport=false
+        assert(m.n.RelocateProof({generationId=m.id},1,m.context).ok and createCount(m)==2)
+    end
+end)
+
+test('pending deletion never admits replacement until exact old release is confirmed',function()
+    local m=active(); m.entities[10].pos.x=200; m.delayDelete=true
+    local p={generationId=m.id}
+    assert(m.n.RelocateProof(p,1,m.context).value.state=='cleanup_pending' and createCount(m)==1)
+    assert(m.n.RelocateProof(p,1,m.context).value.state=='cleanup_pending' and createCount(m)==1)
+    m.entities[20].exists=false; m.n.Tick()
+    local result=m.n.RelocateProof(p,1,m.context)
+    assert(result.ok and result.value.state=='replacement_requested' and createCount(m)==2)
+end)
+
+test('relocation completion replay reports identical replacement without another dispatch',function()
+    local m=active(); m.entities[10].pos.x=200; local p={generationId=m.id}
+    local first=m.n.RelocateProof(p,1,m.context); assert(first.ok)
+    local replay=m.n.RelocateProof(p,1,m.context)
+    assert(replay.ok and replay.value.replayed and replay.value.generationId==first.value.generationId and createCount(m)==2)
+end)
+
+test('relocation refuses changed selection revision even when the same horse is reselected',function()
+    local m=active(); m.entities[10].pos.x=200; local store=m.n.Store
+    m.n.Store=function(...)
+        local result=store(...); if result.ok then assert(m.clear(1).ok); assert(m.select(2).ok) end
+        return result
+    end
+    assert(m.n.RelocateProof({generationId=m.id},1,m.context).code=='revision_conflict')
+    assert(createCount(m)==1 and m.get().value.state=='empty')
+end)
+
+test('another prepared call after cleanup is not consumed by relocation',function()
+    local m=active(); m.entities[10].pos.x=200; local store=m.n.Store
+    m.n.Store=function(...)
+        local result=store(...)
+        if result.ok then assert(m.S.Calls.Prepare({expectedSelectionRevision=1},1,m.context).ok) end
+        return result
+    end
+    assert(m.n.RelocateProof({generationId=m.id},1,m.context).code=='relocation_conflict')
+    assert(createCount(m)==1 and m.get().value.state=='prepared')
+end)
+
+test('another native call after cleanup survives relocation conflict without deletion',function()
+    local m=active(); m.entities[10].pos.x=200; local store=m.n.Store; local other
+    m.n.Store=function(...)
+        local result=store(...); if result.ok then other=m.n.Request({},1,m.context); assert(other.ok) end
+        return result
+    end
+    assert(m.n.RelocateProof({generationId=m.id},1,m.context).code=='relocation_conflict')
+    assert(createCount(m)==2 and m.deletes==1 and m.get().value.generationId==other.value.generationId)
+end)
+
+test('canonical ownership loss after old cleanup prevents replacement',function()
+    local m=active(); m.entities[10].pos.x=200; local store=m.n.Store
+    m.n.Store=function(...)
+        local result=store(...)
+        if result.ok then m.asset.owner.holderId='20000000-0000-4000-8000-000000000099' end
+        return result
+    end
+    assert(not m.n.RelocateProof({generationId=m.id},1,m.context).ok and createCount(m)==1)
+end)
+
+test('unknown replacement commit is terminal and cannot be retried into another spawn',function()
+    local m=active(); m.entities[10].pos.x=200; local store=m.n.Store
+    m.n.Store=function(...)
+        local result=store(...); if result.ok then m.unknownCommit=true end
+        return result
+    end
+    local p={generationId=m.id}; local result=m.n.RelocateProof(p,1,m.context)
+    assert(not result.ok and createCount(m)==1)
+    m.unknownCommit=false
+    assert(not m.n.RelocateProof(p,1,m.context).ok and createCount(m)==1)
+end)
+
+test('resource reload cannot resume an old relocation or create a duplicate replacement',function()
+    local m=active(); m.entities[10].pos.x=200
+    assert(m.n.RelocateProof({generationId=m.id},1,m.context).ok and createCount(m)==2)
+    assert(loadfile('server/native_calls.lua','t',m.env))(); m.n=m.S.NativeCalls; assert(m.n.Start().ok)
+    assert(m.n.RelocateProof({generationId=m.id},1,m.context).code=='relocation_recovery_required' and createCount(m)==2)
+end)
+
+test('relocation cannot reuse a released generation without its live correlation',function()
+    local m=active(); assert(m.store().ok); m.entities[10].pos.x=200
+    assert(m.n.RelocateProof({generationId=m.id},1,m.context).code=='relocation_recovery_required' and createCount(m)==1)
+end)
+
+test('relocation duplicate while cleanup is in flight cannot start another workflow',function()
+    local m=active(); m.entities[10].pos.x=200
+    m.storeReporter=function(source,p)
+        assert(m.n.RelocateProof({generationId=m.id},1,m.context).code=='busy')
+        assert(m.n.StoreCheckResult({generationId=p.generationId,sequence=p.sequence,occupied=false},source).ok)
+    end
+    assert(m.n.RelocateProof({generationId=m.id},1,m.context).ok and createCount(m)==2)
+end)
+
+test('relocation occupancy retry cannot relocate a horse that is now nearby',function()
+    local m=active(); m.entities[10].pos.x=200; m.occupied=true
+    local p={generationId=m.id}; assert(m.n.RelocateProof(p,1,m.context).code=='horse_occupied')
+    m.occupied=false; m.entities[10].pos.x=0
+    assert(m.n.RelocateProof(p,1,m.context).code=='too_near' and not m.deletes and createCount(m)==1)
+end)
+
+test('ordinary distant call requests guarded same-horse relocation without duplicate dispatch',function()
+    local m=active(); m.entities[10].pos.x=200
+    local reply=m.n.Request({},1,m.context)
+    assert(reply.ok and reply.value.relocation and reply.value.state=='replacement_requested' and createCount(m)==2)
+    assert(reply.value.originalGenerationId==m.id and reply.value.horseId==m.t.horseId)
+end)
+
+test('ordinary nearby repeated call requests approach without replacing active generation',function()
+    local m=active(); local reply=m.n.Request({},1,m.context)
+    assert(reply.ok and reply.value.state=='approach_requested' and reply.value.mode=='approach'
+        and reply.value.relayed and reply.value.entitySpawning==false and reply.value.generationId==m.id)
+    assert(createCount(m)==1 and not m.deletes and m.get().value.state=='active')
+end)
+
+test('distant short whistle enters relocation but distant follow does not',function()
+    local m=active(); m.entities[10].pos.x=200
+    assert(m.n.Whistle({mode='follow'},1,m.context).code=='too_far' and not m.deletes)
+    local reply=m.n.Whistle({mode='approach'},1,m.context)
+    assert(reply.ok and reply.value.relocation and reply.value.state=='replacement_requested' and createCount(m)==2)
+end)
+
+test('automatic distant call and whistle preserve occupied active horse',function()
+    for _,mode in ipairs({'request','whistle'}) do
+        local m=active(); m.entities[10].pos.x=200; m.occupied=true
+        local reply=mode=='request' and m.n.Request({},1,m.context) or m.n.Whistle({},1,m.context)
+        assert(reply.code=='horse_occupied' and not m.deletes and createCount(m)==1 and m.get().value.state=='active')
+    end
+end)
+
+test('automatic pending relocation never requests replacement before old cleanup release',function()
+    local m=active(); m.entities[10].pos.x=200; m.delayDelete=true
+    local first=m.n.Request({},1,m.context)
+    assert(first.ok and first.value.relocation and first.value.state=='cleanup_pending' and createCount(m)==1)
+    m.entities[20].exists=false; m.n.Tick()
+    local reply=m.n.RelocateProof({generationId=first.value.originalGenerationId},1,m.context)
+    assert(reply.ok and reply.value.state=='replacement_requested' and createCount(m)==2)
+end)
+
+test('unavailable Toolkit cannot delete original horse for distant relocation',function()
+    local m=active(); m.entities[10].pos.x=200; m.noToolkit=true
+    assert(m.n.Whistle({},1,m.context).code=='dependency_unavailable' and not m.deletes and createCount(m)==1)
+end)
+
+test('native behavior is off for legacy config and authorized only by enabled dispatch policy',function()
+    local m=fixture(); assert(not m.n.Start().value.nativeBehaviorEnabled)
+    assert(m.dispatch().ok); m.horse(); assert(m.bind().value.nativeBehavior==false)
+    m=fixture(); m.env.StablesConfig.nativeBehavior=true; assert(m.n.Start().value.nativeBehaviorEnabled)
+    assert(m.dispatch().ok); m.horse(); local bound=m.bind()
+    assert(bound.ok and bound.value.nativeBehavior==true and bound.value.gameplayAvailable==false)
+end)
+
+test('native behavior config is strict and cannot enable without native calls',function()
+    local m=fixture(); m.env.StablesConfig.nativeBehavior='true'
+    assert(m.n.Start().code=='config_error')
+    m.env.StablesConfig.nativeBehavior=true; m.env.StablesConfig.nativeCalls=false
+    assert(m.n.Start().code=='config_error' and not m.deletes)
+end)
+
+test('native behavior policy is captured per generation and cannot be injected by bind payload',function()
+    local m=fixture(); assert(m.dispatch().ok)
+    m.env.StablesConfig.nativeBehavior=true; assert(m.n.Start().ok); m.horse()
+    assert(m.n.Bind({generationId=m.id,netId=71,nativeBehavior=true},1,m.context).code=='invalid_input')
+    assert(m.bind().value.nativeBehavior==false)
+end)
+
+test('native behavior policy applies to a newly relocated replacement generation',function()
+    local m=fixture(); m.env.StablesConfig.nativeBehavior=true; assert(m.n.Start().ok)
+    assert(m.dispatch().ok); m.horse(); assert(m.bind().value.nativeBehavior)
+    m.entities[10].pos.x=200
+    local replaced=m.n.RelocateProof({generationId=m.id},1,m.context); assert(replaced.ok)
+    m.horse()
+    local bound=m.n.Bind({generationId=replaced.value.generationId,netId=71},1,m.context)
+    assert(bound.ok and bound.value.nativeBehavior and createCount(m)==2)
+end)
+
 print(count..'/'..count..' native coordinator cases passed; native/CFX replication remains a live gate.')
+
+
+test('follow completion clears intent without database reads and next toggle restarts follow',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local ticket=m.events[#m.events].payload; assert(m.n.WhistleClaim(ticket,1,m.context).ok)
+    local get,owned=m.S.CallRepository.Get,m.S.OwnedHorses.GetKnown
+    m.S.CallRepository.Get=function() error('completion must not read SQL') end
+    m.S.OwnedHorses.GetKnown=function() error('completion must not read Assets') end
+    local done=m.n.WhistleDone(ticket,1,m.context)
+    assert(done.ok and done.value.state=='ended' and not done.value.replayed)
+    assert(m.n.WhistleDone(ticket,1,m.context).value.replayed)
+    m.S.CallRepository.Get,m.S.OwnedHorses.GetKnown=get,owned
+    m.time=m.time+1501
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='follow')
+    assert(m.get().value.state=='active' and not m.deletes)
+end)
+
+test('follow completion refuses unclaimed foreign and altered payloads',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local ticket=m.events[#m.events].payload
+    assert(m.n.WhistleDone(ticket,1,m.context).code=='stale_whistle')
+    assert(m.n.WhistleClaim(ticket,1,m.context).ok)
+    assert(not m.n.WhistleDone(ticket,2,m.context).ok)
+    local foreign=m.S.Copy(m.context); foreign.sessionId='new-session'
+    assert(not m.n.WhistleDone(ticket,1,foreign).ok)
+    foreign=m.S.Copy(m.context); foreign.characterId='20000000-0000-4000-8000-000000000099'
+    assert(not m.n.WhistleDone(ticket,1,foreign).ok)
+    assert(m.n.WhistleDone({generationId=m.id,sequence=ticket.sequence,completed=true},1,m.context).code=='invalid_input')
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='stop')
+end)
+
+test('late follow completion cannot clear newer same-generation follow intent',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local first=m.events[#m.events].payload; assert(m.n.WhistleClaim(first,1,m.context).ok)
+    m.time=m.time+1501; assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local second=m.events[#m.events].payload; assert(m.n.WhistleClaim(second,1,m.context).ok)
+    assert(m.n.WhistleDone(first,1,m.context).code=='stale_whistle')
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='stop')
+end)
+
+test('original simulator completion preserves pending follow handoff after migration',function()
+    local m=active(); m.entities[20].owner=2
+    m.S.Foundation.CheckSession=function(source) return (source==1 or source==2) and m.S.Ok(true) or m.S.Err('stale_session','test') end
+    assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local ticket=m.events[#m.events].payload; assert(m.n.WhistleClaim(ticket,2,m.context).ok)
+    m.entities[20].owner=1
+    assert(m.n.WhistleDone(ticket,2,m.context).code=='follow_handoff_pending')
+    m.time=m.time+1501
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='stop')
+end)
+
+test('follow completion refuses changed live identity and cleanup',function()
+    for _,mode in ipairs({'marker','cleanup'}) do
+        local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+        local ticket=m.events[#m.events].payload; assert(m.n.WhistleClaim(ticket,1,m.context).ok)
+        if mode=='marker' then m.entities[20].state.bccStablesObserver='different' else m.store() end
+        assert(not m.n.WhistleDone(ticket,1,m.context).ok)
+    end
+end)
+
+test('follow completion route has strict bounded ticket payload',function()
+    local m=fixture(); local route=m.routes['stables.horses.call.whistle_done.v1']
+    assert(route and route.options.requireCharacter and route.options.maxCalls==2 and route.options.maxPayloadBytes==192)
+    assert(route.options.validatePayload({generationId=m.id,sequence=1}))
+    assert(not route.options.validatePayload({generationId=m.id,sequence=1,netId=71}))
+end)
+
+
+test('nearby HorseCall uses current simulator and fresh canonical authorization',function()
+    local m=active(); m.entities[20].owner=2
+    local read=m.S.Assets.ReadHorse; local assets=0
+    m.S.Assets.ReadHorse=function(...) assets=assets+1; return read(...) end
+    local reply=m.n.Request({},1,m.context)
+    assert(reply.ok and reply.value.networkOwner==2 and assets==1 and createCount(m)==1 and not m.deletes)
+    local event=m.events[#m.events]
+    assert(event.name=='bcc-stables:call:whistle' and event.source==2)
+    m.time=m.time+1501; m.asset.owner.holderId='20000000-0000-4000-8000-000000000099'
+    assert(m.n.Request({},1,m.context).code=='horse_not_found' and createCount(m)==1 and not m.deletes)
+end)
+
+test('nearby repeated HorseCall shares whistle cooldown and supersedes follow intent',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local first=m.events[#m.events].payload
+    assert(m.n.Request({},1,m.context).code=='rate_limited')
+    m.time=m.time+1501
+    assert(m.n.Request({},1,m.context).value.state=='approach_requested')
+    assert(m.n.WhistleClaim(first,1,m.context).code=='stale_whistle')
+    m.time=m.time+1501
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='follow')
+    assert(createCount(m)==1 and not m.deletes)
+end)
+
+test('nearby HorseCall never falls back to replacement after relay refusal',function()
+    for _,mode in ipairs({'owner','marker','route'}) do
+        local m=active()
+        if mode=='owner' then m.entities[20].owner=0 end
+        if mode=='marker' then m.entities[20].state.bccStablesObserver='foreign' end
+        if mode=='route' then m.bucket=1 end
+        assert(not m.n.Request({},1,m.context).ok and createCount(m)==1 and not m.deletes)
+    end
+end)
+
+
+test('follow handoff renews only the simulator ticket and preserves remaining deadline',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local original=m.events[#m.events].payload
+    assert(m.n.WhistleClaim(original,1,m.context).value.followMs==30000)
+    m.time=1000; m.entities[20].owner=2
+    local get,owned=m.S.CallRepository.Get,m.S.OwnedHorses.GetKnown
+    m.S.CallRepository.Get=function() error('handoff detection must not read SQL') end
+    m.S.OwnedHorses.GetKnown=function() error('handoff detection must not read Assets') end
+    m.n.Tick()
+    m.S.CallRepository.Get,m.S.OwnedHorses.GetKnown=get,owned
+    local nextTicket=m.events[#m.events]
+    assert(nextTicket.name=='bcc-stables:call:whistle' and nextTicket.source==2 and nextTicket.payload.sequence>original.sequence)
+    m.S.Foundation.CheckSession=function() return m.S.Ok(true) end
+    local claim=m.n.WhistleClaim(nextTicket.payload,2,m.context)
+    assert(claim.ok and claim.value.followMs==29000 and createCount(m)==1 and not m.deletes)
+    assert(m.n.WhistleDone(original,1,m.context).code=='stale_whistle')
+    m.time=2000; m.entities[20].owner=1; m.n.Tick()
+    assert(m.n.WhistleClaim(m.events[#m.events].payload,1,m.context).value.followMs==28000)
+end)
+
+test('handoff ticket claim retains fresh canonical and current-simulator checks',function()
+    for _,mode in ipairs({'canonical','control'}) do
+        local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+        assert(m.n.WhistleClaim(m.events[#m.events].payload,1,m.context).ok)
+        m.entities[20].owner=2; m.time=1000; m.n.Tick()
+        local ticket=m.events[#m.events].payload
+        m.S.Foundation.CheckSession=function() return m.S.Ok(true) end
+        if mode=='canonical' then m.asset.owner.holderId='20000000-0000-4000-8000-000000000099'
+        else m.entities[20].owner=1 end
+        assert(not m.n.WhistleClaim(ticket,2,m.context).ok and createCount(m)==1 and not m.deletes)
+    end
+end)
+
+test('handoff does not resurrect completed expired approach or stopped tickets',function()
+    for _,mode in ipairs({'completed','expired','approach','stop'}) do
+        local m=active(); assert(m.n.Whistle({mode=mode=='approach' and 'approach' or 'follow'},1,m.context).ok)
+        local ticket=m.events[#m.events].payload; assert(m.n.WhistleClaim(ticket,1,m.context).ok)
+        if mode=='completed' then assert(m.n.WhistleDone(ticket,1,m.context).ok) end
+        if mode=='stop' then assert(m.n.Whistle({mode='stop'},1,m.context).ok) end
+        m.entities[20].owner=2; m.time=mode=='expired' and 30001 or 1000
+        local before=#m.events; m.n.Tick()
+        assert(#m.events==before and not m.deletes)
+    end
+end)
+
+test('follow handoff refuses invalid simulator route distance and target incarnation',function()
+    for _,mode in ipairs({'owner','bucket','distance','target'}) do
+        local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+        assert(m.n.WhistleClaim(m.events[#m.events].payload,1,m.context).ok)
+        m.entities[20].owner=2; m.time=1000
+        if mode=='owner' then m.entities[20].owner=0 end
+        if mode=='bucket' then m.env.GetPlayerRoutingBucket=function(source) return source==2 and 1 or 0 end end
+        if mode=='distance' then m.entities[10].pos.x=200 end
+        if mode=='target' then m.entities[10].netId=73 end
+        local before=#m.events; m.n.Tick()
+        assert(#m.events==before and not m.deletes)
+    end
+end)
+
+test('pending follow handoff is throttled and claim cannot extend expired deadline',function()
+    local m=active(); assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    assert(m.n.WhistleClaim(m.events[#m.events].payload,1,m.context).ok)
+    m.time=1000; m.entities[20].owner=2; m.n.Tick(); local before=#m.events
+    m.time=1100; m.entities[20].owner=1; m.n.Tick(); assert(#m.events==before)
+    m.time=1600; m.n.Tick(); assert(#m.events==before+2)
+    local ticket=m.events[#m.events].payload; m.time=30001
+    assert(m.n.WhistleClaim(ticket,1,m.context).code=='stale_whistle')
+end)
+
+
+test('native inspection exposes bounded movement ticket state without changing follow intent',function()
+    local m=active(); local captured
+    local encode=m.env.json.encode
+    m.env.json.encode=function(result)
+        if type(result)=='table' and result.ok~=nil then captured=result end
+        return encode(result)
+    end
+    m.env.print=function() end
+    local function inspect()
+        m.handlers.BccStablesNative(0,{'inspect','1'}); m.threads[#m.threads]()
+        assert(captured.ok); return captured.value
+    end
+    assert(inspect().movementTicket==nil)
+    assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local ticket=m.events[#m.events].payload
+    local pending=inspect().movementTicket
+    assert(pending.state=='pending' and pending.sequence==ticket.sequence and pending.simulator==1 and pending.mode=='follow')
+    assert(m.n.WhistleClaim(ticket,1,m.context).ok)
+    m.time=1000; local claimed=inspect().movementTicket
+    assert(claimed.state=='claimed' and claimed.followRemainingMs==29000)
+    assert(m.n.WhistleDone(ticket,1,m.context).ok and inspect().movementTicket.state=='ended')
+    assert(m.n.WhistleDone(ticket,1,m.context).value.replayed)
+    m.time=2000; assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    m.time=8000; assert(inspect().movementTicket.state=='expired')
+    assert(createCount(m)==1 and not m.deletes)
+end)
+
+
+test('fresh movement proof reports conservative movement idle state without new authority',function()
+    local m=active(); assert(m.n.MovementProof({},1,m.context).value.movementIdle==true)
+    assert(m.n.Whistle({mode='follow'},1,m.context).ok)
+    local ticket=m.events[#m.events].payload
+    assert(m.n.MovementProof({},1,m.context).value.movementIdle==false)
+    assert(m.n.WhistleClaim(ticket,1,m.context).ok)
+    assert(m.n.MovementProof({},1,m.context).value.movementIdle==false)
+    assert(m.n.WhistleDone(ticket,1,m.context).ok)
+    assert(m.n.MovementProof({},1,m.context).value.movementIdle==true)
+end)
+
+
+test('movement authorization exposes only captured native behavior policy for normal leading',function()
+    local m=active(); assert(m.n.MovementProof({},1,m.context).value.nativeBehavior==false)
+    m.env.StablesConfig.nativeBehavior=true; assert(m.n.Start().ok)
+    assert(m.n.MovementProof({},1,m.context).value.nativeBehavior==false)
+end)
+
+
+local function normalFollowActive()
+    local m=fixture(); m.env.StablesConfig.nativeBehavior=true; assert(m.n.Start().ok)
+    assert(m.dispatch().ok); m.horse(); assert(m.bind().ok)
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='follow')
+    local ticket=m.events[#m.events].payload
+    local claimed=m.n.WhistleClaim(ticket,1,m.context)
+    assert(claimed.ok and claimed.value.normalFollow==true and claimed.value.followMs==30000)
+    return m,ticket
+end
+
+test('normal Follow renews bounded task windows without extra detection reads or new horse',function()
+    local m,first=normalFollowActive(); m.time=24000; m.n.Tick()
+    local before=#m.events; local get,owned=m.S.CallRepository.Get,m.S.OwnedHorses.GetKnown
+    m.S.CallRepository.Get=function() error('renewal detection must not read SQL') end
+    m.S.OwnedHorses.GetKnown=function() error('renewal detection must not read Assets') end
+    m.time=25000; m.n.Tick()
+    m.S.CallRepository.Get,m.S.OwnedHorses.GetKnown=get,owned
+    assert(#m.events==before+2)
+    local second=m.events[#m.events].payload
+    assert(second.sequence>first.sequence and m.n.WhistleDone(first,1,m.context).code=='stale_whistle')
+    local claim=m.n.WhistleClaim(second,1,m.context)
+    assert(claim.ok and claim.value.normalFollow and claim.value.followMs==30000)
+    m.time=50000; m.n.Tick()
+    local third=m.events[#m.events].payload
+    assert(third.sequence>second.sequence and m.n.WhistleClaim(third,1,m.context).value.followMs==30000)
+    assert(createCount(m)==1 and not m.deletes)
+end)
+
+test('normal Follow renewal requires fresh canonical claim and never blindly retries unclaimed ticket',function()
+    local m=normalFollowActive(); m.time=25000; m.n.Tick()
+    local ticket=m.events[#m.events].payload
+    m.asset.owner.holderId='20000000-0000-4000-8000-000000000099'
+    assert(m.n.WhistleClaim(ticket,1,m.context).code=='horse_not_found')
+    local before=#m.events; m.time=26000; m.n.Tick()
+    assert(#m.events==before)
+end)
+
+test('Stop and completion terminate normal Follow renewal and stale completions cannot stop new tickets',function()
+    for _,mode in ipairs({'stop','completed'}) do
+        local m,first=normalFollowActive()
+        if mode=='stop' then assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='stop')
+        else assert(m.n.WhistleDone(first,1,m.context).ok) end
+        local before=#m.events; m.time=25000; m.n.Tick()
+        assert(#m.events==before and createCount(m)==1 and not m.deletes)
+    end
+end)
+
+test('proof and legacy-policy follow do not gain renewal',function()
+    for _,mode in ipairs({'proof','legacy'}) do
+        local m=fixture(); m.env.StablesConfig.nativeBehavior=mode=='proof'; assert(m.n.Start().ok)
+        assert(m.dispatch().ok); m.horse(); assert(m.bind().ok)
+        assert(m.n.Whistle({mode=mode=='proof' and 'follow' or 'toggle_follow'},1,m.context).ok)
+        local claim=m.n.WhistleClaim(m.events[#m.events].payload,1,m.context)
+        assert(claim.ok and claim.value.normalFollow==false)
+        local before=#m.events; m.time=25000; m.n.Tick(); assert(#m.events==before)
+    end
+end)
+
+test('normal Follow handoff preserves mode and current window without extending early',function()
+    local m=normalFollowActive(); m.entities[20].owner=2; m.time=1000; m.n.Tick()
+    local ticket=m.events[#m.events].payload
+    m.S.Foundation.CheckSession=function() return m.S.Ok(true) end
+    local claim=m.n.WhistleClaim(ticket,2,m.context)
+    assert(claim.ok and claim.value.normalFollow and claim.value.followMs==29000)
+end)
+
+test('normal Follow never renews after elapsed window or target moves too far',function()
+    for _,mode in ipairs({'expired','far'}) do
+        local m=normalFollowActive(); local before=#m.events
+        if mode=='far' then m.entities[10].pos.x=200; m.time=25000 else m.time=30001 end
+        m.n.Tick(); assert(#m.events==before and not m.deletes)
+    end
+end)
+
+
+test('long-whistle Stop after normal renewal prevents all later renewal',function()
+    local m,first=normalFollowActive(); m.time=25000; m.n.Tick()
+    local renewed=m.events[#m.events].payload; assert(m.n.WhistleClaim(renewed,1,m.context).ok)
+    assert(m.n.Whistle({mode='toggle_follow'},1,m.context).value.mode=='stop')
+    assert(m.n.WhistleDone(first,1,m.context).code=='stale_whistle')
+    assert(m.n.WhistleDone(renewed,1,m.context).code=='stale_whistle')
+    local before=#m.events; m.time=50000; m.n.Tick()
+    assert(#m.events==before and createCount(m)==1 and not m.deletes)
+end)

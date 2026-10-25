@@ -21,8 +21,8 @@ local function paid(m)
 end
 
 test('clean migration and restart retain checksummed schema',function()
-    local m=fixture(); assert(m.start().ok and m.p.Health().schemaVersion==8 and m.ddl==13)
-    m.reload(); local restarted=m.start(); assert(restarted.ok and restarted.value.applied==0 and m.ddl==13)
+    local m=fixture(); assert(m.start().ok and m.p.Health().schemaVersion==9 and m.ddl==17)
+    m.reload(); local restarted=m.start(); assert(restarted.ok and restarted.value.applied==0 and m.ddl==17)
 end)
 test('001-only upgrade adds later migrations without changing the applied checksum',function()
     local m=fixture(); local migrations=m.env.Stables.Migrations
@@ -30,7 +30,7 @@ test('001-only upgrade adds later migrations without changing the applied checks
     assert(m.start().ok and m.ddl==6)
     local checksum=m.db.ledger['001_purchase_foundation'].checksum
     m.env.Stables.Migrations=migrations; m.reload(); local upgraded=m.start()
-    assert(upgraded.ok and upgraded.value.schemaVersion==8 and upgraded.value.applied==7 and m.ddl==13)
+    assert(upgraded.ok and upgraded.value.schemaVersion==9 and upgraded.value.applied==8 and m.ddl==17)
     assert(m.db.ledger['001_purchase_foundation'].checksum==checksum)
 end)
 test('002 DDL failure resumes without reapplying 001',function()
@@ -38,7 +38,7 @@ test('002 DDL failure resumes without reapplying 001',function()
     assert(m.db.ledger['001_purchase_foundation'].state=='applied')
     assert(m.db.ledger['002_asset_registration'].state=='pending')
     m.failCreate=nil; m.reload(); local resumed=m.start()
-    assert(resumed.ok and resumed.value.applied==7 and resumed.value.resumed==1 and m.ddl==13)
+    assert(resumed.ok and resumed.value.applied==8 and resumed.value.resumed==1 and m.ddl==17)
 end)
 test('checksum drift and unknown recorded migrations fail closed',function()
     local m=fixture(); assert(m.start().ok)
@@ -56,7 +56,7 @@ test('interrupted DDL resumes its original intent without dropping data',functio
     assert(not m.start().ok and m.db.ledger['001_purchase_foundation'].state=='pending')
     assert(m.db.tables.fs_operations)
     m.failCreate=nil; m.reload(); local resumed=m.start()
-    assert(resumed.ok and resumed.value.resumed==1 and m.ddl==13)
+    assert(resumed.ok and resumed.value.resumed==1 and m.ddl==17)
 end)
 test('missing applied table is refused instead of recreated',function()
     local m=fixture(); assert(m.start().ok); m.db.tables.fs_horses=nil; m.reload()
@@ -65,7 +65,7 @@ end)
 test('completion recording failure stays pending for recovery',function()
     local m=fixture(); m.failLedger=true
     assert(m.start().code=='invalid_migration_ledger')
-    m.failLedger=false; m.reload(); assert(m.start().ok and m.ddl==13)
+    m.failLedger=false; m.reload(); assert(m.start().ok and m.ddl==17)
 end)
 test('readiness timeout and invalid capacity run no DDL',function()
     local m=fixture(); m.ready=false
@@ -168,7 +168,7 @@ test('002 upgrade adds call tables while retaining prior checksums and character
     local first=m.db.ledger['001_purchase_foundation'].checksum; local second=m.db.ledger['002_asset_registration'].checksum
     m.db.characters.retained={character_id='retained',revision=2}
     m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
-    assert(r.ok and r.value.schemaVersion==8 and r.value.applied==6 and m.ddl==13)
+    assert(r.ok and r.value.schemaVersion==9 and r.value.applied==7 and m.ddl==17)
     assert(m.db.ledger['001_purchase_foundation'].checksum==first and m.db.ledger['002_asset_registration'].checksum==second)
     assert(m.db.characters.retained.revision==2)
 end)
@@ -176,7 +176,7 @@ test('003 interrupted second table resumes without reapplying 001 or 002',functi
     local m=fixture(); m.failCreate='fs_call_slots'; assert(not m.start().ok)
     assert(m.db.ledger['002_asset_registration'].state=='applied' and m.db.ledger['003_call_generations'].state=='pending')
     m.failCreate=nil; m.reload(); local r=m.start()
-    assert(r.ok and r.value.applied==6 and r.value.resumed==1 and m.ddl==13)
+    assert(r.ok and r.value.applied==7 and r.value.resumed==1 and m.ddl==17)
 end)
 
 test('003 upgrade adds later lifecycle tables and preserves every previous checksum',function()
@@ -186,7 +186,7 @@ test('003 upgrade adds later lifecycle tables and preserves every previous check
     m.db.characters.retained={character_id='retained',revision=4}
     m.db.horses.retained={horse_id='retained',availability='stored',revision=0}
     m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
-    assert(r.ok and r.value.schemaVersion==8 and r.value.applied==5 and m.ddl==13)
+    assert(r.ok and r.value.schemaVersion==9 and r.value.applied==6 and m.ddl==17)
     for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
     assert(m.db.characters.retained.revision==4 and m.db.horses.retained.availability=='stored')
 end)
@@ -195,7 +195,7 @@ test('004 interrupted DDL resumes original ledger without altering prior migrati
     local m=fixture(); m.failCreate='fs_call_bindings'; assert(not m.start().ok)
     assert(m.db.ledger['003_call_generations'].state=='applied' and m.db.ledger['004_call_bindings'].state=='pending')
     m.failCreate=nil; m.reload(); local r=m.start()
-    assert(r.ok and r.value.applied==5 and r.value.resumed==1 and m.ddl==13)
+    assert(r.ok and r.value.applied==6 and r.value.resumed==1 and m.ddl==17)
 end)
 
 test('004 upgrade adds process receipt table without changing prior checksums',function()
@@ -204,14 +204,14 @@ test('004 upgrade adds process receipt table without changing prior checksums',f
     assert(m.start().ok and m.ddl==10)
     local checksums={}; for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
     m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
-    assert(r.ok and r.value.schemaVersion==8 and r.value.applied==4 and m.ddl==13)
+    assert(r.ok and r.value.schemaVersion==9 and r.value.applied==5 and m.ddl==17)
     for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
 end)
 test('005 interrupted process receipt table migration resumes safely',function()
     local m=fixture(); m.failCreate='fs_call_process_epochs'; assert(not m.start().ok)
     assert(m.db.ledger['004_call_bindings'].state=='applied' and m.db.ledger['005_call_process_epochs'].state=='pending')
     m.failCreate=nil; m.reload(); local r=m.start()
-    assert(r.ok and r.value.applied==4 and r.value.resumed==1 and m.ddl==13)
+    assert(r.ok and r.value.applied==5 and r.value.resumed==1 and m.ddl==17)
 end)
 
 test('005 upgrade adds recovery audit while preserving all existing migrations',function()
@@ -220,14 +220,14 @@ test('005 upgrade adds recovery audit while preserving all existing migrations',
     assert(m.start().ok and m.ddl==11)
     local checksums={}; for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
     m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
-    assert(r.ok and r.value.schemaVersion==8 and r.value.applied==3 and m.ddl==13)
+    assert(r.ok and r.value.schemaVersion==9 and r.value.applied==4 and m.ddl==17)
     for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
 end)
 test('006 interrupted recovery audit migration resumes without replaying prior schema',function()
     local m=fixture(); m.failCreate='fs_call_recoveries'; assert(not m.start().ok)
     assert(m.db.ledger['005_call_process_epochs'].state=='applied' and m.db.ledger['006_call_recoveries'].state=='pending')
     m.failCreate=nil; m.reload(); local r=m.start()
-    assert(r.ok and r.value.applied==3 and r.value.resumed==1 and m.ddl==13)
+    assert(r.ok and r.value.applied==4 and r.value.resumed==1 and m.ddl==17)
 end)
 
 test('006 upgrade adds runtime event table while preserving every prior migration',function()
@@ -236,14 +236,14 @@ test('006 upgrade adds runtime event table while preserving every prior migratio
     assert(m.start().ok and m.ddl==12)
     local checksums={}; for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
     m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
-    assert(r.ok and r.value.schemaVersion==8 and r.value.applied==2 and m.ddl==13)
+    assert(r.ok and r.value.schemaVersion==9 and r.value.applied==3 and m.ddl==17)
     for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
 end)
 test('007 interrupted runtime event migration resumes without changing existing tables',function()
     local m=fixture(); m.failCreate='fs_horse_runtime_events'; assert(not m.start().ok)
     assert(m.db.ledger['006_call_recoveries'].state=='applied' and m.db.ledger['007_horse_runtime_projection'].state=='pending')
     m.failCreate=nil; m.reload(); local r=m.start()
-    assert(r.ok and r.value.applied==2 and r.value.resumed==1 and m.ddl==13)
+    assert(r.ok and r.value.applied==3 and r.value.resumed==1 and m.ddl==17)
 end)
 
 test('007 upgrade adds only managed horse-state index and restart adds nothing',function()
@@ -252,7 +252,7 @@ test('007 upgrade adds only managed horse-state index and restart adds nothing',
     m.env.Stables.Migrations=old; assert(m.start().ok); local checksums={}
     for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
     m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
-    assert(r.ok and r.value.schemaVersion==8 and r.value.applied==1 and m.indexDdl==1 and m.ddl==13)
+    assert(r.ok and r.value.schemaVersion==9 and r.value.applied==2 and m.indexDdl==1 and m.ddl==17)
     for id,value in pairs(checksums) do assert(m.db.ledger[id].checksum==value) end
     m.reload(); assert(m.start().value.applied==0 and m.indexDdl==1)
 end)
@@ -262,7 +262,7 @@ test('pending index resumes after creation succeeded but ledger completion was l
     assert(m.db.ledger['008_call_horse_state_index'].state=='pending')
     m.failIndex=nil; m.failLedger=true; m.reload(); assert(not m.start().ok and m.indexDdl==1)
     m.failLedger=nil; m.reload(); local r=m.start()
-    assert(r.ok and r.value.resumed==1 and r.value.applied==1 and m.indexDdl==1)
+    assert(r.ok and r.value.resumed==1 and r.value.applied==2 and m.indexDdl==1)
 end)
 
 test('missing or changed applied index fails closed without silent repair',function()
@@ -288,6 +288,28 @@ test('managed index signature participates in checksum drift detection',function
     local m=fixture(); assert(m.start().ok)
     m.env.Stables.Migrations[8].indexes[1].columns[2]='source_id'
     assert(m.start().code=='migration_checksum_mismatch')
+end)
+
+test('008 upgrade adds empty care foundation while preserving every prior checksum',function()
+    local m=fixture(); local migrations=m.env.Stables.Migrations; local old={}
+    for i=1,8 do old[i]=migrations[i] end
+    m.env.Stables.Migrations=old; assert(m.start().ok and m.ddl==13)
+    local checksums={}; for id,row in pairs(m.db.ledger) do checksums[id]=row.checksum end
+    m.env.Stables.Migrations=migrations; m.reload(); local r=m.start()
+    assert(r.ok and r.value.schemaVersion==9 and r.value.applied==1 and m.ddl==17)
+    for id,checksum in pairs(checksums) do assert(m.db.ledger[id].checksum==checksum) end
+    m.reload(); assert(m.start().value.applied==0 and m.ddl==17)
+end)
+test('009 interrupted care migration resumes without reapplying accepted migrations',function()
+    local m=fixture(); m.failCreate='fs_care_slots'; assert(not m.start().ok)
+    assert(m.db.ledger['008_call_horse_state_index'].state=='applied')
+    assert(m.db.ledger['009_horse_care_foundation'].state=='pending' and m.db.tables.fs_care_operations)
+    m.failCreate=nil; m.reload(); local r=m.start()
+    assert(r.ok and r.value.resumed==1 and r.value.applied==1 and m.ddl==17)
+end)
+test('applied care table loss is refused without silent recreation',function()
+    local m=fixture(); assert(m.start().ok); m.db.tables.fs_care_effects=nil; m.reload()
+    assert(m.start().code=='schema_incomplete' and m.ddl==17)
 end)
 
 print(('%d/%d persistence cases passed; SQL/CFX are modeled, live concurrency pending.'):format(count,count))

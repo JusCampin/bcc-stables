@@ -203,7 +203,7 @@ end
 
 -- Resource-local plan, not a persisted prepared generation or client authority.
 -- Consume immediately in the same coroutine through the native coordinator.
-function C.PlanForDispatch(source,context,stages)
+function C.PlanForDispatch(source,context,stages,expected)
     local checked=S.Foundation.CheckSession(source,context); if not checked.ok then return checked end
     if not enabled then return S.Err('call_preparation_disabled','Call preparation is disabled.') end
     context=S.Copy(context); context.characterId=context.characterId:lower()
@@ -214,6 +214,7 @@ function C.PlanForDispatch(source,context,stages)
     local previous=S.CallRepository.Get(context.characterId); if not previous.ok then return previous end
     if stages then stages.existingLeaseMs=GetGameTimer()-began end
     local lease=previous.value
+    if expected and lease.state~='empty' then return S.Err('relocation_conflict','Another call already occupies the replacement slot.') end
     if lease.state~='empty' then
         if lease.sessionId~=context.sessionId or lease.source~=source then
             return S.Err('call_recovery_required','Previous-session call requires recovery.')
@@ -233,6 +234,11 @@ function C.PlanForDispatch(source,context,stages)
     if stages then stages.selectionMs=GetGameTimer()-began; stages.transactionMs=0; stages.recheckMs=0 end
     local v=selected.value
     if not v.selected or not v.available then return S.Err('selection_required','Select an available owned horse first.') end
+    if expected and (v.horse.horseId~=expected.horseId or v.horse.operationId~=expected.operationId
+        or v.horse.assetId~=expected.assetId or v.horse.modelKey~=expected.modelKey
+        or v.revision~=expected.selectionRevision) then
+        return S.Err('revision_conflict','Relocation selection changed; no replacement requested.')
+    end
     if lease.state=='prepared' and (lease.horseId~=v.horse.horseId or lease.selectionRevision~=v.revision) then
         return S.Err('revision_conflict','Prepared selection changed.')
     end
