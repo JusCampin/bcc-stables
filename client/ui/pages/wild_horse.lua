@@ -68,7 +68,7 @@ function BuildWildHorsePage(mount)
             if salePending then return end
             salePending = true
 
-            Core.Callback.TriggerAsync('bcc-horses:CheckPlayerCooldown', function(onCooldown, remaining)
+            Core.Callback.TriggerAsync('bcc-stables:CheckPlayerCooldown', function(onCooldown, remaining)
                 salePending = false
                 if onCooldown then
                     notifySellCooldown(remaining)
@@ -79,7 +79,7 @@ function BuildWildHorsePage(mount)
                     return
                 end
 
-                TriggerServerEvent('bcc-horses:SellTamedHorse', horse.modelHash, NetworkGetNetworkIdFromEntity(mount))
+                TriggerServerEvent('bcc-stables:SellTamedHorse', horse.modelHash, NetworkGetNetworkIdFromEntity(mount))
                 StableMenu:Close()
                 RemoveTamedHorseEntity(mount)
             end, 'sellTame')

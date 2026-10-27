@@ -10,7 +10,7 @@ local function payoutCharacter(character, currencyType, amount)
     end
 end
 
-Core.Callback.Register('bcc-horses:SellMyHorse', function(source, cb, data)
+Core.Callback.Register('bcc-stables:SellMyHorse', function(source, cb, data)
     local src = source
     local character, charId = ServerUtils.getCharacter(src, 'owned horse sale callback')
     if not character or not charId or type(data) ~= 'table' then return cb(false) end
@@ -59,7 +59,7 @@ Core.Callback.Register('bcc-horses:SellMyHorse', function(source, cb, data)
                     if not rowsAffected or rowsAffected <= 0 then return cb(false) end
 
                     HorseXpCache[horseId] = nil
-                    EmitHorseServerLifecycleEvent('bcc-horses:server:horseRemoved', {
+                    EmitHorseServerLifecycleEvent('bcc-stables:server:horseRemoved', {
                         id = horseId,
                         ownerCharId = charId,
                         reason = 'sold',
@@ -96,7 +96,7 @@ local function getNearbyTamedHorse(src, modelHash, netId)
     return #(GetEntityCoords(playerPed) - GetEntityCoords(horse)) <= 10.0 and horse or nil
 end
 
-RegisterNetEvent('bcc-horses:SellTamedHorse', function(modelHash, netId)
+RegisterNetEvent('bcc-stables:SellTamedHorse', function(modelHash, netId)
     local src = source
     local character, charId = ServerUtils.getCharacter(src, 'tamed horse sale event')
     if not character or not charId then return end

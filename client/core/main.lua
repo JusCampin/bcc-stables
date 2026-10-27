@@ -81,15 +81,15 @@ CreateThread(function()
             DBG:Info('Healthy horse detected. Initializing tracking loops.')
 
             if CanPlayerTrainHorses() then
-                TriggerEvent('bcc-horses:TravelXpMonitor')
+                TriggerEvent('bcc-stables:TravelXpMonitor')
             end
 
             if (tonumber(Config.care.saveIntervalMinutes) or 0) > 0 then
-                TriggerEvent('bcc-horses:HorseMonitor')
+                TriggerEvent('bcc-stables:HorseMonitor')
             end
 
             if Config.display.horseTag.enabled then
-                TriggerEvent('bcc-horses:HorseTag')
+                TriggerEvent('bcc-stables:HorseTag')
             end
         end
 
@@ -398,10 +398,10 @@ local function handleWhistleEvent(eventIndex)
 
     if eventData:GetInt32(8) == SHORT_HORSE_WHISTLE then
         DBG:Info('Whistle Horse')
-        TriggerEvent('bcc-horses:WhistleHorse')
+        TriggerEvent('bcc-stables:WhistleHorse')
     else
         DBG:Info('Follow Whistle Horse')
-        TriggerEvent('bcc-horses:LongWhistleHorse')
+        TriggerEvent('bcc-stables:LongWhistleHorse')
     end
 end
 
@@ -422,7 +422,7 @@ local function handleEntityDestroyedEvent(eventIndex)
     local eventData = getEventData(0, eventIndex, 9)
     if eventData and eventData:GetInt32(0) == MyHorse then
         CreateThread(function()
-            TriggerEvent('bcc-horses:ManageHorseDeath')
+            TriggerEvent('bcc-stables:ManageHorseDeath')
         end)
     end
 end
@@ -450,7 +450,7 @@ CreateThread(function()
     end
 end)
 
-AddEventHandler('bcc-horses:HorseMonitor', function()
+AddEventHandler('bcc-stables:HorseMonitor', function()
     horseMonitorGeneration = horseMonitorGeneration + 1
     local generation = horseMonitorGeneration
     local monitoredHorse = MyHorse

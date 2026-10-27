@@ -12,12 +12,12 @@ local function restorePlayerBucket(src)
         local horseData = Player(src).state.HorseData
         local netId = horseData and tonumber(horseData.MyHorse)
         if netId and netId ~= 0 then
-            TriggerClientEvent('bcc-horses:UpdateMyHorseEntity', src, netId)
+            TriggerClientEvent('bcc-stables:UpdateMyHorseEntity', src, netId)
         end
     end)
 end
 
-Core.Callback.Register('bcc-horses:EnterPreviewInstance', function(source, cb)
+Core.Callback.Register('bcc-stables:EnterPreviewInstance', function(source, cb)
     local src = source
     if previewSessions[src] == nil then
         previewSessions[src] = GetPlayerRoutingBucket(src)
@@ -28,7 +28,7 @@ Core.Callback.Register('bcc-horses:EnterPreviewInstance', function(source, cb)
     cb(true)
 end)
 
-RegisterNetEvent('bcc-horses:ExitPreviewInstance', function()
+RegisterNetEvent('bcc-stables:ExitPreviewInstance', function()
     restorePlayerBucket(source)
 end)
 

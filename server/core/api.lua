@@ -98,7 +98,7 @@ exports('TransferHorse', function(senderSource, recipientSource, horseId)
     if not success then return false, 'database_error' end
 
     HorseXpCache[horseId] = nil
-    EmitHorseServerLifecycleEvent('bcc-horses:server:horseOwnerChanged', {
+    EmitHorseServerLifecycleEvent('bcc-stables:server:horseOwnerChanged', {
         id = horseId,
         previousOwnerCharId = senderCharId,
         ownerCharId = recipientCharId,

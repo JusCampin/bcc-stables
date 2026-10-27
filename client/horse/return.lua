@@ -73,7 +73,7 @@ function FleeHorse()
         IsHorseFleeingState = false
 
         if clearActiveHorse(horse) then
-            EmitHorseLifecycleEvent('bcc-horses:client:horseReturned', returnedHorse)
+            EmitHorseLifecycleEvent('bcc-stables:client:horseReturned', returnedHorse)
             DBG:Info('Active mount successfully despawned.')
         end
     end)
@@ -109,7 +109,7 @@ function ReturnHorse(silent)
     GetControlOfHorse()
     deleteHorseEntity(horse)
     clearActiveHorse(horse)
-    EmitHorseLifecycleEvent('bcc-horses:client:horseReturned', returnedHorse)
+    EmitHorseLifecycleEvent('bcc-stables:client:horseReturned', returnedHorse)
 
     InWrithe = false
     IsHorseFleeingState = false

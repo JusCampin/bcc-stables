@@ -52,7 +52,7 @@ local function updateStatsCache(horseId, charId, stats, health, stamina, xp)
     HorseXpCache[horseId] = cached
 end
 
-RegisterNetEvent('bcc-horses:SaveHorseStatsToDb', function(statsJson, horseId, healthCore, staminaCore)
+RegisterNetEvent('bcc-stables:SaveHorseStatsToDb', function(statsJson, horseId, healthCore, staminaCore)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'horse stat save event')
     local targetHorseId = tonumber(horseId)
@@ -236,9 +236,9 @@ function HorseProgression.addXp(ownerSource, horseId, reward, xpSource, notifyLe
         local health = clampCore(row.current_health)
         local stamina = clampCore(row.current_stamina)
         updateStatsCache(targetHorseId, charId, stats, health, stamina, newXp)
-        TriggerClientEvent('bcc-horses:SyncHorseStats', src, json.encode(stats), targetHorseId,
+        TriggerClientEvent('bcc-stables:SyncHorseStats', src, json.encode(stats), targetHorseId,
             newXp, health, stamina, amount, xpSource)
-        EmitHorseServerLifecycleEvent('bcc-horses:server:xpAwarded', {
+        EmitHorseServerLifecycleEvent('bcc-stables:server:xpAwarded', {
             source = src, charId = charId, horseId = targetHorseId,
             amount = amount, reason = xpSource, totalXp = newXp,
         })
@@ -253,7 +253,7 @@ function HorseProgression.addXp(ownerSource, horseId, reward, xpSource, notifyLe
     return awarded == true
 end
 
-RegisterNetEvent('bcc-horses:UpdateHorseXp', function(xpSource, horseId)
+RegisterNetEvent('bcc-stables:UpdateHorseXp', function(xpSource, horseId)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'horse XP event')
     local targetHorseId = tonumber(horseId)

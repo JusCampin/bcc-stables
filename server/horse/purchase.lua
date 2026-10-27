@@ -107,7 +107,7 @@ local function insertHorse(character, charId, data, captured, stats, price, curr
 
             if onSuccess then onSuccess() end
             LogToDiscord(charId, successLog)
-            EmitHorseServerLifecycleEvent('bcc-horses:server:horseCreated', {
+            EmitHorseServerLifecycleEvent('bcc-stables:server:horseCreated', {
                 id = tonumber(insertId),
                 ownerCharId = charId,
                 model = data.ModelH,
@@ -136,7 +136,7 @@ local function validatePurchaseData(data)
     return colorConfig
 end
 
-Core.Callback.Register('bcc-horses:ProcessHorsePurchase', function(source, cb, data)
+Core.Callback.Register('bcc-stables:ProcessHorsePurchase', function(source, cb, data)
     local src = source
     local character, charId = beginTransaction(src, cb, 'horse purchase callback')
     if not character or not charId then return end
@@ -195,7 +195,7 @@ local function validateTamedEntity(src, data)
     return distance <= 10.0 and netId or nil
 end
 
-Core.Callback.Register('bcc-horses:RegisterHorse', function(source, cb, data)
+Core.Callback.Register('bcc-stables:RegisterHorse', function(source, cb, data)
     local src = source
     if not Config.taming.registration.enabled then return cb(false, 'Registration is currently disabled.') end
     if Config.training.tamingTrainerOnly and not IsSourceAuthorizedTrainer(src) then

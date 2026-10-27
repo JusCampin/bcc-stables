@@ -35,7 +35,7 @@ local function processQueue(siteId)
     end
 end
 
-Core.Callback.Register('bcc-horses:ReserveStableDelivery', function(source, cb, siteId)
+Core.Callback.Register('bcc-stables:ReserveStableDelivery', function(source, cb, siteId)
     local src = source
     if type(siteId) ~= 'string' or not Stables[siteId] then return cb(false) end
 
@@ -58,7 +58,7 @@ Core.Callback.Register('bcc-horses:ReserveStableDelivery', function(source, cb, 
     processQueue(siteId)
 end)
 
-RegisterNetEvent('bcc-horses:ReleaseStableDelivery', function(siteId, token)
+RegisterNetEvent('bcc-stables:ReleaseStableDelivery', function(siteId, token)
     local queue = type(siteId) == 'string' and stableQueues[siteId] or nil
     local active = queue and queue.active
     if not active or active.source ~= source or active.token ~= token then return end

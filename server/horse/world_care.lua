@@ -35,14 +35,14 @@ local function reservationKey(kind, model, x, y, z)
     )
 end
 
-RegisterNetEvent('bcc-horses:worldCare:reserve', function(requestId, kind, model, x, y, z, horseId)
+RegisterNetEvent('bcc-stables:worldCare:reserve', function(requestId, kind, model, x, y, z, horseId)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'world-care reservation')
     local targetHorseId = tonumber(horseId)
     if type(requestId) ~= 'string' or #requestId > 64
         or not charId or not targetHorseId or (kind ~= 'trough' and kind ~= 'hay')
         or not finiteNumber(model) or not finiteNumber(x) or not finiteNumber(y) or not finiteNumber(z) then
-        TriggerClientEvent('bcc-horses:worldCare:reservationResult', src, requestId, false)
+        TriggerClientEvent('bcc-stables:worldCare:reservationResult', src, requestId, false)
         return
     end
 
@@ -52,7 +52,7 @@ RegisterNetEvent('bcc-horses:worldCare:reserve', function(requestId, kind, model
         function(owned)
             if not GetPlayerName(src) then return end
             if not owned then
-                TriggerClientEvent('bcc-horses:worldCare:reservationResult', src, requestId, false)
+                TriggerClientEvent('bcc-stables:worldCare:reservationResult', src, requestId, false)
                 return
             end
 
@@ -65,7 +65,7 @@ RegisterNetEvent('bcc-horses:worldCare:reserve', function(requestId, kind, model
             end
 
             if existing and existing.source ~= src then
-                TriggerClientEvent('bcc-horses:worldCare:reservationResult', src, requestId, false)
+                TriggerClientEvent('bcc-stables:worldCare:reservationResult', src, requestId, false)
                 return
             end
 
@@ -74,17 +74,17 @@ RegisterNetEvent('bcc-horses:worldCare:reserve', function(requestId, kind, model
             reservations[key] = { source = src, expiresAt = now + timeout }
             reservationsBySource[src] = reservationsBySource[src] or {}
             reservationsBySource[src][key] = true
-            TriggerClientEvent('bcc-horses:worldCare:reservationResult', src, requestId, true, key)
+            TriggerClientEvent('bcc-stables:worldCare:reservationResult', src, requestId, true, key)
         end
     )
 end)
 
-RegisterNetEvent('bcc-horses:worldCare:release', function(key)
+RegisterNetEvent('bcc-stables:worldCare:release', function(key)
     local reservation = type(key) == 'string' and reservations[key]
     if reservation and reservation.source == source then clearReservation(key) end
 end)
 
-RegisterNetEvent('bcc-horses:worldCare:releaseAll', function()
+RegisterNetEvent('bcc-stables:worldCare:releaseAll', function()
     clearSourceReservations(source)
 end)
 

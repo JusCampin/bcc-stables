@@ -286,7 +286,7 @@ local function runHorsePromptLoop()
                         RemoveHorsePrompts()
 
                         if Citizen.InvokeNative(0x91AEF906BCA88877, 0, INPUT_REVIVE) then -- IsDisabledControlJustPressed
-                            TriggerEvent('bcc-horses:ReviveHorse')
+                            TriggerEvent('bcc-stables:ReviveHorse')
                         end
                     else
                         if Citizen.InvokeNative(0x91AEF906BCA88877, 0, INPUT_OPEN_SATCHEL_HORSE_MENU) then -- IsDisabledControlJustPressed
@@ -327,7 +327,7 @@ local function runHorsePromptLoop()
     horsePromptLoopRunning = false
 end
 
-AddEventHandler('bcc-horses:HorsePrompts', function()
+AddEventHandler('bcc-stables:HorsePrompts', function()
     if horsePromptLoopRunning or not MyHorse or MyHorse == 0 then return end
 
     horsePromptLoopRunning = true

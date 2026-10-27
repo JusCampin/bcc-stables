@@ -347,7 +347,7 @@ local function runTimedInteraction(horse, duration, callback)
     end)
 end
 
-RegisterNetEvent('bcc-horses:BrushHorse', function()
+RegisterNetEvent('bcc-stables:BrushHorse', function()
     if IsInteractingWithHorse then return end
 
     local horse = getNearbyHorse()
@@ -366,7 +366,7 @@ RegisterNetEvent('bcc-horses:BrushHorse', function()
     end)
 end)
 
-RegisterNetEvent('bcc-horses:FeedHorse', function(item)
+RegisterNetEvent('bcc-stables:FeedHorse', function(item)
     if IsInteractingWithHorse then return end
 
     local horse = getNearbyHorse()
@@ -376,14 +376,14 @@ RegisterNetEvent('bcc-horses:FeedHorse', function(item)
     IsInteractingWithHorse = true
     ClearPedTasks(playerPed)
     Citizen.InvokeNative(0xCD181A959CFDD7F4, playerPed, horse, `Interaction_Food`, `s_horsnack_haycube01x`, true)
-    TriggerServerEvent('bcc-horses:RemoveItem', item)
+    TriggerServerEvent('bcc-stables:RemoveItem', item)
 
     runTimedInteraction(horse, 5000, function()
         rewardInteraction(horse, Config.care.boosts.feed, 'feed', Config.training.xpRewards.feed, true, 25)
     end)
 end)
 
-RegisterNetEvent('bcc-horses:UseLantern', function()
+RegisterNetEvent('bcc-stables:UseLantern', function()
     local horse = getNearbyHorse()
     if not horse then return end
     local playerPed = PlayerPedId()
@@ -773,7 +773,7 @@ local function activateFlamingHooves(horse, horseId, durationMs)
     end)
 end
 
-RegisterNetEvent('bcc-horses:TryFlamingHooves', function()
+RegisterNetEvent('bcc-stables:TryFlamingHooves', function()
     if flamingHoovesActive then
         return Core.NotifyRightTip('Flaming hooves are already active.', 4000)
     end
@@ -789,7 +789,7 @@ RegisterNetEvent('bcc-horses:TryFlamingHooves', function()
         return Core.NotifyRightTip(('Bonding level %d is required.'):format(requiredLevel), 4000)
     end
 
-    local result = Core.Callback.TriggerAwait('bcc-horses:ActivateFlamingHooves', {
+    local result = Core.Callback.TriggerAwait('bcc-stables:ActivateFlamingHooves', {
         horseId = horseId,
         bondingLevel = bondingLevel,
     })

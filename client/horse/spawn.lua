@@ -42,7 +42,7 @@ end
 local function releaseStableDelivery(spawnOptions)
     if type(spawnOptions) ~= 'table' or not spawnOptions.deliveryToken then return end
     TriggerServerEvent(
-        'bcc-horses:ReleaseStableDelivery',
+        'bcc-stables:ReleaseStableDelivery',
         spawnOptions.stableSite,
         spawnOptions.deliveryToken
     )
@@ -150,7 +150,7 @@ function GetSelectedHorse(horseId, spawnOptions)
     isSelectedHorseRequestActive = true
 
     local function requestHorseData()
-        Core.Callback.TriggerAsync('bcc-horses:GetSelectedHorseData', function(result)
+        Core.Callback.TriggerAsync('bcc-stables:GetSelectedHorseData', function(result)
             isSelectedHorseRequestActive = false
 
             if not result then
@@ -171,7 +171,7 @@ function GetSelectedHorse(horseId, spawnOptions)
     end
 
     Core.NotifyRightTip('The stable hand is preparing your horse.', 3000)
-    Core.Callback.TriggerAsync('bcc-horses:ReserveStableDelivery', function(reservation)
+    Core.Callback.TriggerAsync('bcc-stables:ReserveStableDelivery', function(reservation)
         if type(reservation) ~= 'table' or not reservation.token then
             isSelectedHorseRequestActive = false
             Core.NotifyRightTip('The stable is busy. Please try again.', 4000)
@@ -275,7 +275,7 @@ function WhistleSpawn()
 end
 
 -- Call Horse to Player
-AddEventHandler('bcc-horses:WhistleHorse', function()
+AddEventHandler('bcc-stables:WhistleHorse', function()
     local horse = MyHorse
     if not horseExists(horse) then
         followingHorse = nil
@@ -302,7 +302,7 @@ AddEventHandler('bcc-horses:WhistleHorse', function()
 end)
 
 -- Call Horse or have Horse Follow Player
-AddEventHandler('bcc-horses:LongWhistleHorse', function()
+AddEventHandler('bcc-stables:LongWhistleHorse', function()
     local playerPed = PlayerPedId()
     local horse = MyHorse
 
@@ -572,14 +572,14 @@ function SpawnHorse(data, spawnOptions)
     SetPedPromptName(horse, HorseName)
 
     -- Event Triggering Pipeline
-    TriggerServerEvent('bcc-horses:RegisterInventory', MyHorseId)
+    TriggerServerEvent('bcc-stables:RegisterInventory', MyHorseId)
     Entity(horse).state:set('myHorseId', MyHorseId, true)
 
-    TriggerEvent('bcc-horses:HorsePrompts')
+    TriggerEvent('bcc-stables:HorsePrompts')
 
     HorseAppearance.resetTracking(horse)
     HorseAppearance.applyLoadout(horse, data.tackLoadout or {})
-    EmitHorseLifecycleEvent('bcc-horses:client:horseSpawned')
+    EmitHorseLifecycleEvent('bcc-stables:client:horseSpawned')
 
     -- Reset Local State Flags
     InWrithe, UsingLantern = false, false
@@ -598,7 +598,7 @@ function SpawnHorse(data, spawnOptions)
     end
 end
 
-RegisterNetEvent('bcc-horses:HorsesDiedOfOldAge', function(horseIds)
+RegisterNetEvent('bcc-stables:HorsesDiedOfOldAge', function(horseIds)
     local expired = {}
     for _, horseId in ipairs(type(horseIds) == 'table' and horseIds or {}) do
         local numericId = tonumber(horseId)

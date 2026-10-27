@@ -64,13 +64,13 @@ for _, itemName in ipairs(Config.items.food or {}) do
         if not src then return end
 
         exports.vorp_inventory:closeInventory(src)
-        TriggerClientEvent('bcc-horses:FeedHorse', src, itemName)
+        TriggerClientEvent('bcc-stables:FeedHorse', src, itemName)
     end)
 end
 
 registerDurableUsable(
     Config.items.brush,
-    'bcc-horses:BrushHorse',
+    'bcc-stables:BrushHorse',
     _U('horsebrushDesc') or 'Horse Brush',
     _U('itemBroke') or 'Your brush has worn out and broken!',
     false,
@@ -79,7 +79,7 @@ registerDurableUsable(
 
 registerDurableUsable(
     Config.items.lantern,
-    'bcc-horses:UseLantern',
+    'bcc-stables:UseLantern',
     _U('lanternDesc') or 'Horse Lantern Attachment',
     _U('itemBroke') or 'Your lantern attachment has broken from wear!',
     false,
@@ -106,11 +106,11 @@ if Config.items.flamingHooves and Config.items.flamingHooves.enabled then
         if not src or not ServerUtils.getCharacter(src, 'flaming hooves usable item') then return end
 
         exports.vorp_inventory:closeInventory(src)
-        TriggerClientEvent('bcc-horses:TryFlamingHooves', src)
+        TriggerClientEvent('bcc-stables:TryFlamingHooves', src)
     end)
 end
 
-Core.Callback.Register('bcc-horses:ActivateFlamingHooves', function(source, cb, data)
+Core.Callback.Register('bcc-stables:ActivateFlamingHooves', function(source, cb, data)
     local src = source
     local flamingConfig = Config.items.flamingHooves
     local _, charId = ServerUtils.getCharacter(src, 'flaming hooves activation')

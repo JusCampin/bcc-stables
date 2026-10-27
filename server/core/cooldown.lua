@@ -82,7 +82,7 @@ function CooldownService.isActive(cooldownKey, charId)
     return secondsRemaining > 0, secondsRemaining
 end
 
-Core.Callback.Register('bcc-horses:CheckPlayerCooldown', function(source, cb, cooldownKey)
+Core.Callback.Register('bcc-stables:CheckPlayerCooldown', function(source, cb, cooldownKey)
     local _, charId = ServerUtils.getCharacter(source, 'cooldown callback')
     if not charId then return cb(false, 0) end
 

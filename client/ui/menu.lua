@@ -334,7 +334,7 @@ function StopRotation()
     RotateDirection = nil
 end
 
-StableMenu = FeatherMenu:RegisterMenu('bcc-horses:StableMenu', {
+StableMenu = FeatherMenu:RegisterMenu('bcc-stables:StableMenu', {
     top = '3%',
     left = '3%',
     ['720width'] = '400px',

@@ -66,7 +66,7 @@ local function shouldDisplayHorseTag(playerPed, horse, maxDistanceSquared)
 end
 
 -- Set the active horse's name and health bar above the entity.
-AddEventHandler('bcc-horses:HorseTag', function()
+AddEventHandler('bcc-stables:HorseTag', function()
     horseTagGeneration = horseTagGeneration + 1
 
     local generation = horseTagGeneration

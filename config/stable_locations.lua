@@ -9,7 +9,7 @@
 -- horse.preview: menu heading, camera side, and optional cameraSettings overrides.
 -- horse.delivery: destination used after a called horse leaves the spawn point.
 -- trainerBuy: restrict catalog purchases at this stable to configured trainers.
-Stables = {
+StableLocations = {
     valentine = {
         shop = {
             name = 'Valentine Stable',

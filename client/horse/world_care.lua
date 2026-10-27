@@ -145,7 +145,7 @@ local function requestReservation(context)
     end
 
     TriggerServerEvent(
-        'bcc-horses:worldCare:reserve',
+        'bcc-stables:worldCare:reserve',
         requestId,
         context.kind,
         context.profile.hash,
@@ -161,13 +161,13 @@ local function requestReservation(context)
     return response
 end
 
-RegisterNetEvent('bcc-horses:worldCare:reservationResult', function(requestId, granted, reservationKey)
+RegisterNetEvent('bcc-stables:worldCare:reservationResult', function(requestId, granted, reservationKey)
     local callback = WorldCare.pendingReservations[requestId]
     if callback then callback(granted, reservationKey) end
 end)
 
 local function releaseReservation(key)
-    if key then TriggerServerEvent('bcc-horses:worldCare:release', key) end
+    if key then TriggerServerEvent('bcc-stables:worldCare:release', key) end
 end
 
 local function approachInteractionPoint(horse, context, token)
@@ -368,5 +368,5 @@ AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     local active = WorldCare.activeInteraction
     if active and horseExists(active.horse) then ClearPedTasks(active.horse) end
-    TriggerServerEvent('bcc-horses:worldCare:releaseAll')
+    TriggerServerEvent('bcc-stables:worldCare:releaseAll')
 end)

@@ -303,7 +303,7 @@ function HorseInfoMenu()
 
     if activeHorseInfoMenu then activeHorseInfoMenu:Close() end
 
-    activeHorseInfoMenu = FeatherMenu:RegisterMenu('bcc-horses:HorseInfoMenu', {
+    activeHorseInfoMenu = FeatherMenu:RegisterMenu('bcc-stables:HorseInfoMenu', {
         top = '3%',
         left = '3%',
         ['720width'] = '400px',

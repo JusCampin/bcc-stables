@@ -107,7 +107,7 @@ local function notifyExpiredOwners(rows)
         local user = src and Core.getUser(src)
         local character = user and user.getUsedCharacter
         local horseIds = character and byCharacter[tonumber(character.charIdentifier)]
-        if horseIds then TriggerClientEvent('bcc-horses:HorsesDiedOfOldAge', src, horseIds) end
+        if horseIds then TriggerClientEvent('bcc-stables:HorsesDiedOfOldAge', src, horseIds) end
     end
 end
 

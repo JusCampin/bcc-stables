@@ -87,7 +87,7 @@ function CheckPlayerJob(siteId)
 end
 
 ---@param targetNetId number
-RegisterNetEvent('bcc-horses:UpdateMyHorseEntity', function(targetNetId)
+RegisterNetEvent('bcc-stables:UpdateMyHorseEntity', function(targetNetId)
     if not targetNetId or targetNetId == 0 then return end
 
     pendingHorseEntityNetId = targetNetId
@@ -265,7 +265,7 @@ end
 ---@param onSuccess function
 ---@param onFailure function|nil
 function FetchRosterAndAction(onSuccess, onFailure)
-    Core.Callback.TriggerAsync('bcc-horses:GetMyHorsesData', function(horseData)
+    Core.Callback.TriggerAsync('bcc-stables:GetMyHorsesData', function(horseData)
         if horseData then
             MyHorsesData = horseData
 
@@ -330,7 +330,7 @@ function SetSelectedHorseLocally(horseId, persist)
     end
 
     if persist then
-        TriggerServerEvent('bcc-horses:SelectActiveHorse', selectedHorseId)
+        TriggerServerEvent('bcc-stables:SelectActiveHorse', selectedHorseId)
     end
 
     return true

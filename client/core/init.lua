@@ -1,7 +1,7 @@
 Core = exports.vorp_core:GetCore()
 local bccUtils = exports['bcc-utils'].initiate()
 FeatherMenu = exports['feather-menu'].initiate()
-DBG = bccUtils.Debug:Get('bcc-horses', Config.development.enabled)
+DBG = bccUtils.Debug:Get('bcc-stables', Config.development.enabled)
 
 if DBG then
     DBG:Enable()

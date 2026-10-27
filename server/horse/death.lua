@@ -42,7 +42,7 @@ local function updateHorseCache(horseId, charid, selected, writhing, dead)
     end
 end
 
-Core.Callback.Register('bcc-horses:HorseReviveItem', function(source, cb)
+Core.Callback.Register('bcc-stables:HorseReviveItem', function(source, cb)
     if not ServerUtils.getCharacter(source, 'horse reviver callback') then return cb(false) end
 
     local reviver = Config.items.reviver
@@ -52,7 +52,7 @@ Core.Callback.Register('bcc-horses:HorseReviveItem', function(source, cb)
     cb(itemCount > 0)
 end)
 
-Core.Callback.Register('bcc-horses:TransitionHorseDeathState', function(source, cb, horseId, executionState)
+Core.Callback.Register('bcc-stables:TransitionHorseDeathState', function(source, cb, horseId, executionState)
     local src = source
     local _, charid = ServerUtils.getCharacter(src, 'horse lifecycle callback')
     local targetHorseId = tonumber(horseId)

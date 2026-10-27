@@ -34,7 +34,7 @@ function OpenInventory(horsePedId, horseId, isLooting)
         )
     end
 
-    TriggerServerEvent('bcc-horses:OpenInventory', horseId)
+    TriggerServerEvent('bcc-stables:OpenInventory', horseId)
 end
 
 local function canLootNearbyHorse(playerPed, horse)

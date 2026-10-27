@@ -39,7 +39,7 @@ function TackSession.open(horseId, entity, siteId, onReady)
 
     openRequestId = openRequestId + 1
     local requestId = openRequestId
-    Core.Callback.TriggerAsync('bcc-horses:GetTackShopData', function(data)
+    Core.Callback.TriggerAsync('bcc-stables:GetTackShopData', function(data)
         if requestId ~= openRequestId then return end
         if type(data) ~= 'table' then
             Core.NotifyRightTip('Unable to load tack inventory.', 4000)
@@ -179,7 +179,7 @@ function TackSession.checkout(currency, callback)
         end
     end
 
-    Core.Callback.TriggerAsync('bcc-horses:CheckoutTack', function(success, result)
+    Core.Callback.TriggerAsync('bcc-stables:CheckoutTack', function(success, result)
         state.pending = false
         if success and type(result) == 'table' then
             state.original = copyLoadout(result.loadout)

@@ -86,7 +86,7 @@ function SaveXp(xpSource)
         Citizen.InvokeNative(NATIVE.addAttributePoints, MyHorse, ATTRIBUTE.bonding, pointsToGive)
     end
 
-    TriggerServerEvent('bcc-horses:UpdateHorseXp', xpSource, MyHorseId)
+    TriggerServerEvent('bcc-stables:UpdateHorseXp', xpSource, MyHorseId)
 end
 
 local function awardTravelXp(source, debugMessage)
@@ -135,7 +135,7 @@ local function runTravelXpMonitor()
     IsTravelMonitorActive = false
 end
 
-AddEventHandler('bcc-horses:TravelXpMonitor', function()
+AddEventHandler('bcc-stables:TravelXpMonitor', function()
     if IsTravelMonitorActive then return end
 
     IsTravelMonitorActive = true
@@ -167,7 +167,7 @@ function SaveHorseStats(dead)
     end
 
     TriggerServerEvent(
-        'bcc-horses:SaveHorseStatsToDb',
+        'bcc-stables:SaveHorseStatsToDb',
         json.encode(MyHorseStats),
         MyHorseId,
         clampCore(healthCore),
@@ -175,7 +175,7 @@ function SaveHorseStats(dead)
     )
 end
 
-RegisterNetEvent('bcc-horses:SyncHorseStats', function(
+RegisterNetEvent('bcc-stables:SyncHorseStats', function(
     statsJson,
     horseId,
     trueXp,

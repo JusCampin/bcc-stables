@@ -1,15 +1,22 @@
-# bcc-horses
+# bcc-stables
 
-> `bcc-horses` is the required core for the modular BCC horse ecosystem. Optional care,
-> training, tack, lifecycle, custom-coat, breeding, and ability resources integrate through
-> its public exports and lifecycle events. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> Feather refactor in progress. The active manifest currently enables calling the
+> existing selected horse, riding, native leading, whistle approach/follow and storing it,
+> plus Menu v2 roster, catalog browsing, selection, preview, details and renaming.
+> Public paid checkout is implemented behind `Config.commerce.purchasesEnabled`
+> (default false). One paid purchase/call/store path is live-confirmed; broader
+> fault/concurrency acceptance remains pending. It uses the
+> existing Feather Stables schema 11; do not install the VORP SQL below.
+> See [integration status and testing](docs/FEATHER_INTEGRATION.md).
 
-Implemented optional resources currently include `bcc-horse-training`,
-`bcc-horse-abilities`, and `bcc-horse-trading`.
+Abilities, trading and training are being consolidated into this resource.
+Do not start their separate legacy resources alongside this runtime. The remaining
+sections describe preserved legacy gameplay, not features already enabled by the
+current Feather manifest.
 
 ## Description
 
-Embark on an adventure through the untamed wilderness of the Old West with bcc-horses! Here, your trusty steed awaits, ready to be personalized with unique mane styles, tail variations, coat colors, and stylish accessories. Groom, feed, and clean your horse to keep them at peak performance.
+Embark on an adventure through the untamed wilderness of the Old West with bcc-stables! Here, your trusty steed awaits, ready to be personalized with unique mane styles, tail variations, coat colors, and stylish accessories. Groom, feed, and clean your horse to keep them at peak performance.
 
 ## Features
 
@@ -164,12 +171,12 @@ Config.training.showLevelUpMessage = true
 - [bcc-utils](https://github.com/BryceCanyonCounty/bcc-utils)
 - [feather-menu](https://github.com/FeatherFramework/feather-menu/releases)
 
-## Installation
+## Legacy VORP installation (reference only)
 
 1. Make sure dependencies are installed/updated and ensured before this script.
-2. Download the latest release `bcc-horses.zip` at [/releases/latest](https://github.com/BryceCanyonCounty/bcc-horses/releases/latest).
-3. Add the `bcc-horses` folder to your resources folder.
-4. Add `ensure bcc-horses` to your `server.cfg`.
+2. Download the latest release `bcc-stables.zip` at [/releases/latest](https://github.com/BryceCanyonCounty/bcc-stables/releases/latest).
+3. Add the `bcc-stables` folder to your resources folder.
+4. Add `ensure bcc-stables` to your `server.cfg`.
 5. Run the included database file `database/schema.sql`.
 6. Add images from `assets/inventory` to: `...\vorp_inventory\html\img\items`.
 7. Restart the server.
@@ -186,4 +193,4 @@ The `stats` JSON column stores progression ranks. Current health and stamina cor
 
 ## GitHub
 
-- [bcc-horses](https://github.com/BryceCanyonCounty/bcc-horses)
+- [bcc-stables](https://github.com/BryceCanyonCounty/bcc-stables)

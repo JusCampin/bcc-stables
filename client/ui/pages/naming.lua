@@ -23,7 +23,7 @@ local function submitPurchase(data, name)
     for key, value in pairs(data) do request[key] = value end
     request.name = name
 
-    Core.Callback.TriggerAsync('bcc-horses:ProcessHorsePurchase', function(success, result)
+    Core.Callback.TriggerAsync('bcc-stables:ProcessHorsePurchase', function(success, result)
         if success then
             showRoster(result)
         else
@@ -38,7 +38,7 @@ local function submitRegistration(data, name)
     for key, value in pairs(data) do request[key] = value end
     request.name = name
 
-    Core.Callback.TriggerAsync('bcc-horses:RegisterHorse', function(success, result)
+    Core.Callback.TriggerAsync('bcc-stables:RegisterHorse', function(success, result)
         if not success then
             namingSubmissionActive = false
             Core.NotifyRightTip(result or 'Horse registration failed.', 5000)
@@ -59,7 +59,7 @@ local function submitRegistration(data, name)
 end
 
 local function submitRename(data, name)
-    Core.Callback.TriggerAsync('bcc-horses:RenameHorse', function(success)
+    Core.Callback.TriggerAsync('bcc-stables:RenameHorse', function(success)
         if not success then
             namingSubmissionActive = false
             Core.NotifyRightTip('The horse name could not be updated.', 4000)

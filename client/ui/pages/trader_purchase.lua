@@ -82,7 +82,7 @@ function BuildTraderPurchasePage()
         end
 
         pending = true
-        Core.Callback.TriggerAsync('bcc-horses:ProcessHorsePurchase', function(success, result)
+        Core.Callback.TriggerAsync('bcc-stables:ProcessHorsePurchase', function(success, result)
             pending = false
             if not success then
                 Core.NotifyRightTip(result or 'Horse purchase failed.', 5000)

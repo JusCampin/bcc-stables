@@ -17,7 +17,7 @@ end
 local function persistDeathState(state)
     if not MyHorseId then return false end
 
-    return Core.Callback.TriggerAwait('bcc-horses:TransitionHorseDeathState', MyHorseId, state) == true
+    return Core.Callback.TriggerAwait('bcc-stables:TransitionHorseDeathState', MyHorseId, state) == true
 end
 
 local function deleteActiveHorse()
@@ -70,7 +70,7 @@ local function killHorse(state)
     deleteActiveHorse()
 end
 
-AddEventHandler('bcc-horses:ManageHorseDeath', function()
+AddEventHandler('bcc-stables:ManageHorseDeath', function()
     if isDeathProcessingActive then return end
     setDeathProcessing(true)
 
@@ -85,7 +85,7 @@ AddEventHandler('bcc-horses:ManageHorseDeath', function()
     setDeathProcessing(false)
 end)
 
-AddEventHandler('bcc-horses:ReviveHorse', function()
+AddEventHandler('bcc-stables:ReviveHorse', function()
     if isDeathProcessingActive or not InWrithe or not isValidHorse(MyHorse) or IsEntityDead(MyHorse) then return end
     setDeathProcessing(true)
 
@@ -93,7 +93,7 @@ AddEventHandler('bcc-horses:ReviveHorse', function()
     local horseId = MyHorseId
     local playerPed = PlayerPedId()
 
-    if not Core.Callback.TriggerAwait('bcc-horses:HorseReviveItem') then
+    if not Core.Callback.TriggerAwait('bcc-stables:HorseReviveItem') then
         Core.NotifyRightTip(_U('noReviver'), 4000)
         setDeathProcessing(false)
         return
@@ -110,7 +110,7 @@ AddEventHandler('bcc-horses:ReviveHorse', function()
 
     -- Re-check and consume on the server after the animation. This closes the
     -- item-check race without letting the client choose which item is removed.
-    local revived = Core.Callback.TriggerAwait('bcc-horses:TransitionHorseDeathState', horseId, DEATH_STATE.REVIVED)
+    local revived = Core.Callback.TriggerAwait('bcc-stables:TransitionHorseDeathState', horseId, DEATH_STATE.REVIVED)
     if not revived then
         ClearPedTasks(playerPed)
         Core.NotifyRightTip(_U('noReviver'), 4000)

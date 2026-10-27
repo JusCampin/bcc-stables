@@ -23,7 +23,7 @@ local function syncSelectedHorseStats(src, horseRow)
     if type(horseRow) ~= 'table' or not ServerUtils.databaseBoolean(horseRow.is_selected) then return end
 
     TriggerClientEvent(
-        'bcc-horses:SyncHorseStats',
+        'bcc-stables:SyncHorseStats',
         src,
         type(horseRow.stats) == 'string' and horseRow.stats or json.encode(horseRow.stats or copyDefaultStats()),
         tonumber(horseRow.id),
@@ -81,7 +81,7 @@ local function parseRawHorseRow(horseRow)
     })
 end
 
-Core.Callback.Register('bcc-horses:GetSelectedHorseData', function(source, cb, request)
+Core.Callback.Register('bcc-stables:GetSelectedHorseData', function(source, cb, request)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'selected horse callback')
     if not charId then return cb(false) end
@@ -155,7 +155,7 @@ Core.Callback.Register('bcc-horses:GetSelectedHorseData', function(source, cb, r
     end)
 end)
 
-Core.Callback.Register('bcc-horses:GetMyHorsesData', function(source, cb)
+Core.Callback.Register('bcc-stables:GetMyHorsesData', function(source, cb)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'horse roster callback')
     if not charId then return cb(false) end
@@ -193,7 +193,7 @@ Core.Callback.Register('bcc-horses:GetMyHorsesData', function(source, cb)
     end)
 end)
 
-RegisterNetEvent('bcc-horses:SelectActiveHorse', function(horseId)
+RegisterNetEvent('bcc-stables:SelectActiveHorse', function(horseId)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'horse selection event')
     if not charId then return end
@@ -235,7 +235,7 @@ RegisterNetEvent('bcc-horses:SelectActiveHorse', function(horseId)
                 end
 
                 DBG:Info('Horse selection recorded for ID:', targetHorseId)
-                EmitHorseServerLifecycleEvent('bcc-horses:server:horseSelected', {
+                EmitHorseServerLifecycleEvent('bcc-stables:server:horseSelected', {
                     id = targetHorseId,
                     ownerCharId = charId,
                     source = src,
@@ -245,7 +245,7 @@ RegisterNetEvent('bcc-horses:SelectActiveHorse', function(horseId)
     )
 end)
 
-Core.Callback.Register('bcc-horses:RenameHorse', function(source, cb, data)
+Core.Callback.Register('bcc-stables:RenameHorse', function(source, cb, data)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'horse rename callback')
     if not charId then return cb(false) end
@@ -290,6 +290,6 @@ RegisterNetEvent('vorp_core:instanceplayers', function(setRoom)
     local currentNetId = horseData and tonumber(horseData.MyHorse)
 
     if currentNetId and currentNetId ~= 0 then
-        TriggerClientEvent('bcc-horses:UpdateMyHorseEntity', src, currentNetId)
+        TriggerClientEvent('bcc-stables:UpdateMyHorseEntity', src, currentNetId)
     end
 end)

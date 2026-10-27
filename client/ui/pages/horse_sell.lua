@@ -70,7 +70,7 @@ function BuildHorseSellPage(horse)
         if pending then return end
         pending = true
 
-        Core.Callback.TriggerAsync('bcc-horses:SellMyHorse', function(success)
+        Core.Callback.TriggerAsync('bcc-stables:SellMyHorse', function(success)
             pending = false
             if not success then
                 Core.NotifyRightTip('The horse sale could not be completed.', 4000)

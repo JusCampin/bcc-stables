@@ -1,6 +1,5 @@
 Config = {
-    -- Language file used for player-facing text.
-    locale = 'en_lang',
+    -- Player language comes from feather-settings through Core's locale service.
     -----------------------------------------------------
 
     development = {
@@ -58,6 +57,11 @@ Config = {
         horseInfo = 'horseInfo',        -- Open detailed information for the active horse.
     },
     -----------------------------------------------------
+
+    commerce = {
+        -- Enable public paid horse checkout after Economy/Assets access is configured.
+        purchasesEnabled = false,
+    },
 
     horseLimits = {
         player = 5,   -- Maximum horses owned by a normal player.

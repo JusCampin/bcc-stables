@@ -1,6 +1,60 @@
 # BCC Horses architecture
 
-`bcc-horses` is the required horse platform. It owns horse identity, ownership, spawning,
+> **Historical VORP architecture below.** It is not the active Feather contract.
+> The release target is one `bcc-stables` resource consolidating abilities,
+> trading and training as internal modules. Do not start their separate resources
+> or load the legacy numeric-ID exports alongside the current runtime.
+> See [current integration](FEATHER_INTEGRATION.md) and
+> [the repository-wide audit](FEATHER_REFACTOR_AUDIT.md).
+
+## Current Feather boundaries
+
+Core owns current character/session identity; Assets owns canonical horse
+ownership. Stables owns selection, saved gameplay projections and physical call
+generations in the existing schema-11 tables. The owned repository reads identity
+and fresh Assets ownership; it does not authorize spawning by itself. The call
+repository owns transactional lifecycle writes, and the server horse controller
+owns observed creation, binding, occupancy, cleanup, confirmed disappearance and
+restart reconciliation. Client presentation and whistle task execution operate
+under that generation; network ownership may migrate without transferring the
+horse to another character.
+
+Economy and Inventory will own currency/item/container operations through supported
+provider contracts and receipts. Menu v2 will own rendering/focus; Stables will
+own menu sessions, preview entities/camera and authorized gameplay actions.
+Preview routing must be coordinated with physical cleanup. Share these boundaries
+across internal care, tack, progression, trading, training and abilities modules;
+do not create self-export calls or independent horse registries for each feature.
+
+Localization uses each player's selected language from `feather-settings`, across
+all Feather and BCC resources. Resources may own translation dictionaries, but
+must not independently choose a language through `Config.locale` or an equivalent
+resource setting. Use the supported settings contract, including language changes,
+and localize server-originated messages for the individual recipient. The legacy
+locale configuration below/in preserved source is awaiting replacement.
+If the requested language's localization file is missing, fall back to English.
+
+Call/ride/native leading, whistle approach/follow/stop, store and guarded
+distance relocation are active. Menu v2 roster/selection/local preview, details, rename and presentation have
+been manually confirmed. Read-only catalog browsing now reuses the same preview
+session, uses shared configured prices/base stats and is awaiting live testing. Saved condition is restored; care,
+inventory, tack, progression, aging/death, training and abilities
+remain unloaded source. Horses remain invincible pending lifecycle integration.
+Public paid checkout is implemented behind Config.commerce.purchasesEnabled,
+with durable same-key Economy/Assets recovery and atomic local fulfillment in the
+existing schema. Free/job/trainer checkout and automatic paid-order refunds remain
+unimplemented. server/horse/checkout.lua is the internal coordinator; providers
+are called outside SQL transactions. It does not revive legacy purchase modules.
+Boot validates the existing migration ledger and does not install/reset tables.
+
+Location data now uses `StableLocations`, separate from runtime `Stables`.
+Legacy unloaded modules still using the old location namespace require adaptation.
+Preserve gameplay/data deliberately;
+replace old authority boundaries rather than enabling old init/main files.
+
+## Preserved legacy design (reference only)
+
+`bcc-stables` is the required horse platform. It owns horse identity, ownership, spawning,
 selection, progression, stable access, and the authoritative `bcc_player_horses` row.
 
 ## Feature resources
@@ -17,7 +71,7 @@ selection, progression, stable access, and the authoritative `bcc_player_horses`
 - `bcc-horse-trading`: player-to-player proposals and consent. The feature owns its prompt
   and handshake session, while core performs the authoritative ownership transfer.
 
-Feature resources must validate horses through `bcc-horses` exports and must not directly
+Feature resources must validate horses through `bcc-stables` exports and must not directly
 change ownership, selection, XP, core stats, or death state in `bcc_player_horses`.
 
 ## Client exports
@@ -45,16 +99,16 @@ change ownership, selection, XP, core stats, or death state in `bcc_player_horse
 
 Client-local events:
 
-- `bcc-horses:client:horseSpawned`
-- `bcc-horses:client:horseReturned`
+- `bcc-stables:client:horseSpawned`
+- `bcc-stables:client:horseReturned`
 
 Server-local events:
 
-- `bcc-horses:server:horseCreated`
-- `bcc-horses:server:horseSelected`
-- `bcc-horses:server:horseRemoved`
-- `bcc-horses:server:horseOwnerChanged`
-- `bcc-horses:server:xpAwarded`
+- `bcc-stables:server:horseCreated`
+- `bcc-stables:server:horseSelected`
+- `bcc-stables:server:horseRemoved`
+- `bcc-stables:server:horseOwnerChanged`
+- `bcc-stables:server:xpAwarded`
 
 ## Custom coats and breeding
 

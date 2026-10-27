@@ -85,7 +85,7 @@ local function isHorseNearby(src, horseId)
     return false
 end
 
-RegisterNetEvent('bcc-horses:RegisterInventory', function(horseId)
+RegisterNetEvent('bcc-stables:RegisterInventory', function(horseId)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'horse inventory registration')
     local targetHorseId = tonumber(horseId)
@@ -104,7 +104,7 @@ RegisterNetEvent('bcc-horses:RegisterInventory', function(horseId)
     )
 end)
 
-RegisterNetEvent('bcc-horses:OpenInventory', function(horseId)
+RegisterNetEvent('bcc-stables:OpenInventory', function(horseId)
     local src = source
     local _, charId = ServerUtils.getCharacter(src, 'horse inventory open event')
     local targetHorseId = tonumber(horseId)
@@ -129,7 +129,7 @@ RegisterNetEvent('bcc-horses:OpenInventory', function(horseId)
 end)
 
 ---@param item string
-RegisterNetEvent('bcc-horses:RemoveItem', function(item)
+RegisterNetEvent('bcc-stables:RemoveItem', function(item)
     local src = source
     if not ServerUtils.getCharacter(src, 'horse food removal event') then return end
     if type(item) ~= 'string' or not horseFoodItems[item] then return end

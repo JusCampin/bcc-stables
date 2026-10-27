@@ -116,7 +116,7 @@ local function checkoutHasChanges(currentRows, checkout)
     return false
 end
 
-Core.Callback.Register('bcc-horses:GetTackShopData', function(source, cb, data)
+Core.Callback.Register('bcc-stables:GetTackShopData', function(source, cb, data)
     local _, charId = ServerUtils.getCharacter(source, 'tack shop data callback')
     local horseId = type(data) == 'table' and tonumber(data.horseId)
     local siteId = type(data) == 'table' and data.siteId
@@ -131,7 +131,7 @@ Core.Callback.Register('bcc-horses:GetTackShopData', function(source, cb, data)
     })
 end)
 
-Core.Callback.Register('bcc-horses:CheckoutTack', function(source, cb, data)
+Core.Callback.Register('bcc-stables:CheckoutTack', function(source, cb, data)
     local src = source
     local character, charId = ServerUtils.getCharacter(src, 'tack checkout callback')
     local horseId = type(data) == 'table' and tonumber(data.horseId)

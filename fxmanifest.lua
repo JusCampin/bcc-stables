@@ -4,21 +4,13 @@ rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aw
 game 'rdr3'
 lua54 'yes'
 author 'BCC Team'
-description 'Core horse ownership, progression, spawning, and stable services for BCC resources.'
+description 'BCC Stables for Feather: call, riding, leading and store integration.'
 
 shared_scripts {
     'config/settings.lua',
-    'config/care.lua',
-    'config/aging.lua',
-    'config/inventory.lua',
-    'config/training.lua',
-    'config/map.lua',
     'config/horse_catalog.lua',
     'config/stable_locations.lua',
-    'config/tack/catalog.lua',
-    'config/tack/categories/*.lua',
-    'shared/tack.lua',
-    'locales/init.lua',
+    'shared/locale.lua',
     'locales/en.lua',
     'locales/fr.lua',
     'locales/it.lua',
@@ -29,56 +21,36 @@ shared_scripts {
 }
 
 client_scripts {
-    'client/core/init.lua',
-    'client/core/helpers.lua',
-    'client/core/api.lua',
-    'client/core/preview_instance.lua',
+    'client/core/feather.lua',
+    'client/core/locale.lua',
     'client/core/dataview.lua',
-    'client/ui/menu.lua',
-    'client/ui/pages/*.lua',
-    'client/horse/inventory.lua',
-    'client/horse/progression.lua',
-    'client/horse/features.lua',
-    'client/horse/spawn.lua',
-    'client/horse/return.lua',
-    'client/horse/interactions.lua',
-    'client/horse/world_care.lua',
-    'client/tack/controller.lua',
-    'client/tack/session.lua',
-    'client/horse/death.lua',
-    'client/horse/prompts.lua',
-    'client/core/main.lua',
-    'client/core/commands.lua',
-    'client/horse/info_card.lua',
+    'client/horse/controller.lua',
+    'client/horse/whistle.lua',
+    'client/ui/preview.lua',
+    'client/ui/stable.lua'
 }
 
 server_scripts {
-    '@oxmysql/lib/MySQL.lua',
-    'server/core/init.lua',
-    'server/core/helpers.lua',
-    'server/core/api.lua',
-    'server/horse/aging.lua',
-    'server/core/preview_instance.lua',
-    'server/horse/delivery.lua',
-    'server/core/cooldown.lua',
-    'server/horse/inventory.lua',
-    'server/horse/progression.lua',
-    'server/horse/interactions.lua',
-    'server/horse/world_care.lua',
-    'server/tack/repository.lua',
-    'server/tack/service.lua',
-    'server/horse/death.lua',
-    'server/horse/purchase.lua',
-    'server/horse/sale.lua',
-    'server/core/main.lua'
+    '@feather-mysql/lib/DB.lua',
+    'server/core/feather.lua',
+    'server/horse/owned_repository.lua',
+    'server/horse/call_repository.lua',
+    'server/horse/controller.lua',
+    'server/horse/whistle.lua',
+    'server/horse/checkout.lua',
+    'server/ui/stable.lua',
+    'server/core/boot.lua'
 }
 
 version '2.0.0'
 
 dependencies {
-    'vorp_core',
-    'vorp_inventory',
-    'bcc-utils',
-    'feather-menu',
-    'oxmysql',
+    'feather-core',
+    'feather-mysql',
+    'feather-assets',
+    'feather-economy',
+    'feather-toolkit',
+    'feather-routing',
+    'feather-menu-v2',
+    'feather-settings'
 }

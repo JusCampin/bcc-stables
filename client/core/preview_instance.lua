@@ -19,9 +19,9 @@ function EnterPreviewInstance(callback)
     previewRequestId = previewRequestId + 1
     local requestId = previewRequestId
 
-    Core.Callback.TriggerAsync('bcc-horses:EnterPreviewInstance', function(success)
+    Core.Callback.TriggerAsync('bcc-stables:EnterPreviewInstance', function(success)
         if requestId ~= previewRequestId then
-            TriggerServerEvent('bcc-horses:ExitPreviewInstance')
+            TriggerServerEvent('bcc-stables:ExitPreviewInstance')
             if callback then callback(false) end
             return
         end
@@ -41,7 +41,7 @@ function ExitPreviewInstance()
     if not previewActive and not wasEntering then return end
 
     previewActive = false
-    TriggerServerEvent('bcc-horses:ExitPreviewInstance')
+    TriggerServerEvent('bcc-stables:ExitPreviewInstance')
 end
 
 AddEventHandler('onResourceStop', function(resourceName)
