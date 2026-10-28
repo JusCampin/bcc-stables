@@ -16,6 +16,23 @@ Tack.Slots = {
     { id = 'horseshoes',  source = 'Horseshoes',   label = 'Horseshoes',   category = 0xFACFC3C0 },
 }
 
+-- Feather item ownership/assignment policies for the currently enabled categories.
+-- Keep the original saddle slot name so existing equipment and receipts replay.
+Tack.PieceOrder = {'saddle', 'saddlecloth', 'stirrups', 'saddle_horn'}
+-- Component ownership is anchored to the saddle instance, even while stored.
+Tack.AssemblyPrefixes = {stirrups='tack_stir_',saddle_horn='tack_horn_'}
+-- Included visual parts when a saddle has no separately equipped upgrade.
+Tack.SaddleDefaults = {
+    stirrups = 'stirrups_0x03b3ab08',
+    saddle_horn = 'saddle_horn_0x107d9598',
+}
+Tack.PieceSlots = {
+    saddle = {itemName='horse_saddle',prefix='horse_',labelKey='saddles',numberKey='saddleNumber',pattern='^Saddle (%d+)$',emptyKey='noSaddle'},
+    saddlecloth = {itemName='horse_saddlecloth',prefix='horse_cloth_',labelKey='saddlecloths',numberKey='saddleclothNumber',pattern='^Saddlecloth (%d+)$',emptyKey='noSaddlecloth'},
+    stirrups = {itemName='horse_stirrups',prefix='horse_stir_',labelKey='stirrups',numberKey='stirrupNumber',pattern='^Stirrup (%d+)$',emptyKey='saddleDefault',requiresSaddle=true},
+    saddle_horn = {itemName='horse_saddle_horn',prefix='horse_horn_',labelKey='saddleHorns',numberKey='saddleHornNumber',pattern='^Saddle Horn (%d+)$',emptyKey='saddleDefault',requiresSaddle=true},
+}
+
 Tack.SlotsById = {}
 Tack.Catalog = {}
 Tack.CatalogBySlot = {}

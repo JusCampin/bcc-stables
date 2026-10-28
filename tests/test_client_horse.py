@@ -108,6 +108,24 @@ class ClientHorseTest(unittest.TestCase):
         self.assertEqual(self.lua.globals().cores[1],80)
         self.assertIsNotNone(self.lua.globals().public.GetActiveHorse())
 
+    def test_saved_tack_applies_on_bound_physical_horse(self):
+        self.lua.execute('''
+            HorseAppearance={applyLoadout=function(entity,loadout)
+                assert(entity==100 and loadout.saddle.catalogId=='saved-saddle')
+                tackApplied=true;return true
+            end,resetTracking=function() end}
+            local call=exports['feather-core'].CallRPC
+            exports['feather-core'].CallRPC=function(self,route,p,callback)
+                call(self,route,p,function(result)
+                    if route:find('.bind.',1,true) then result.value.tack={saddle={catalogId='saved-saddle'}} end
+                    callback(result)
+                end)
+            end
+            CreateFromServer()
+        ''')
+        self.assertTrue(self.lua.globals().tackApplied)
+        self.assertEqual(self.lua.globals().reveals,1)
+
     def test_saved_sex_applies_after_settling_before_reveal(self):
         self.lua.execute("spec.gender='female';CreateFromServer()")
         self.assertEqual(self.lua.globals().sexValues[1],1)

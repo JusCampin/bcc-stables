@@ -9,6 +9,72 @@
 
 ## Current Feather boundaries
 
+Tack ownership is character-scoped, not horse-scoped. Each purchased piece has its
+own durable identity and belongs to the character independently of any horse.
+Horse loadouts reference those owned pieces; a piece may be equipped on at most
+one horse at a time. Moving it between owned horses changes the equipment
+assignment, preserves its identity/condition, and does not purchase it again.
+Unequipping retains the piece in the character's tack collection. Horse ownership
+must never serve as tack ownership, and tack purchases must not be modeled as
+per-horse appearance unlocks. The four-category tack flow implements this through
+Inventory unique items and generic equipment slots (`horse_<horse UUID>`), behind
+`Config.tack.enabled`. Inventory owns both item and assignment persistence, with
+one-instance/one-slot uniqueness. Stables stores only `fs_tack_orders` for durable
+quotes, payment and item-delivery recovery; no duplicate tack inventory/loadout
+table is introduced. `database/feather_tack.sql` installs that optional table and
+the non-weapon unique `horse_saddle`, `horse_saddlecloth`, `horse_stirrups` and
+`horse_saddle_horn` definitions; the base migration ledger stays11.
+
+The Horse Tack top tab browses the selected horse's preserved four-category catalog through
+the same menu route and local preview. Existing `shared/tack.lua` catalog IDs and
+`client/tack/controller.lua` component natives are reused. Catalog selection is local presentation;
+explicit checkout adds a piece to My Tack, and Equip assigns it separately.
+Leaving the page restores saved equipment; close deletes the
+preview and clears component tracking. Saddle removal also clears implicit horn
+and stirrup components from presets; explicitly selected pieces are reapplied in
+loadout order. Four bounded production menu actions handle collection, quote,
+confirmation and equipment; recovery shares the existing checkout worker.
+Equipment admission holds the Stables character/call lock, uses Inventory's
+data-only revision fence and atomic assignment API, and reads assignments after
+uncertain replies. No provider SQL or CFX transaction handle crosses resources.
+Synchronous Inventory guards hold pending/equipped pieces, with locked equipment
+snapshots protecting move/destroy after restart. Normal recall validates owned
+pieces and restores native components. Preview rendering/cleanup passed live;
+purchase, moving between horses, saved recall and final cleanup passed the
+controlled live test.
+Saddlecloths are independent. Custom stirrups/horns attach to a saddle instance
+using generic Inventory equipment anchors tack_stir_<instance> / tack_horn_<instance>.
+The saddle retains its normal horse_<UUID> assignment while fitted and parks in
+tack_saddle_<instance> while unequipped, preserving the assembled unit. Replacing
+a saddle parks the old assembly; moving the parent changes the effective horse
+of its parts without rewriting them. Remove from Saddle detaches an individual
+part. Parent/part condition and identity never change during these operations.
+Inventory owns these relationships; no duplicate Stables loadout or assembly table.
+Its additive CAS batch API atomically changes declared source/destination/parking
+slots, checks ownership and guards, and refuses stale assignments. Legacy per-horse
+parts are converted per saddle with the parent slot in the same expected batch.
+Saddle Default restores fixed included parts (Stirrup 1 and Saddle Horn 1) without deleting the owned item.
+Existing saddle equipment slots and saddle.v1 order/grant receipts remain compatible.
+All four categories passed the requested live checks. Assembly movement, breakdown and native recall
+also passed the requested live gate on 2026-10-28. Private stable custody is now
+implemented and reported working live on 2026-10-28; sale and trade remain pending.
+Inventory's inventory_character_collections mapping owns one private container per
+resource/purpose/character. Stables uses stables.tack.v1 at every stable. Containers
+have no carried character_id, generic owner/public access or client open path. Only
+configured caller/purpose/item definitions can be read, adopted, granted or equipped.
+Existing eligible carried pieces transfer in bounded batches in one transaction;
+IDs, metadata and equipment assignments remain unchanged, while row_revision bumps
+once for the custody move. No item is recreated. Collection grants use the existing
+unique receipt with an optional payload-bound collectionKey; old carried grant
+fingerprints remain unchanged and their historical deliveries are adopted. Stables
+keeps immutable order custody terms and uses only data-based scoped exports. Other
+resources retain their carried-only item/equipment contracts. Capacity is collection
+slots (default 500), separate from carried weight/slots; food/brushes stay carried.
+Collection readiness is part of Inventory startup; its optional mapping table is
+created there. A location/identity mismatch refuses access instead of recreating
+contents. No extra Stables schema, custody table, worker or proof command is added.
+Legacy VORP tack services remain unloaded.
+
 Core owns current character/session identity; Assets owns canonical horse
 ownership. Stables owns selection, saved gameplay projections and physical call
 generations in the existing schema-11 tables. The owned repository reads identity
@@ -37,9 +103,17 @@ If the requested language's localization file is missing, fall back to English.
 Call/ride/native leading, whistle approach/follow/stop, store and guarded
 distance relocation are active. Menu v2 roster/selection/local preview, details, rename and presentation have
 been manually confirmed. Read-only catalog browsing now reuses the same preview
-session, uses shared configured prices/base stats and is awaiting live testing. Saved condition is restored; care,
-inventory, tack, progression, aging/death, training and abilities
-remain unloaded source. Horses remain invincible pending lifecycle integration.
+session and uses shared configured prices/base stats. Catalog presentation and one
+paid purchase path are live-confirmed. Saved condition is restored. Feeding is
+opt-in through Inventory usable items; the server reserves the exact clicked
+instance, snapshots per-food effects, consumes through a durable receipt and
+commits the saved benefit once. Current-simulator core depletion is checkpointed
+before feeding and normal Store; native readings can only lower saved cores.
+Applied-care revisions protect benefits awaiting native delivery. Its callback returns before the animation to
+release Inventory's active-use guard. No Feed prompt, idle frame reader or item
+search is needed. Brushing shares that pipeline with durable Inventory tool wear and exact-horse cleaning;
+live acceptance is pending. Horse containers, tack, progression, aging/death,
+training and abilities remain unloaded. Horses remain invincible pending lifecycle integration.
 Public paid checkout is implemented behind Config.commerce.purchasesEnabled,
 with durable same-key Economy/Assets recovery and atomic local fulfillment in the
 existing schema. Free/job/trainer checkout and automatic paid-order refunds remain

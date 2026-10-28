@@ -4,9 +4,33 @@ local P=Stables.Preview
 local active,sequence=nil,0
 local retiring={}
 local function yes(v) return v==true or v==1 end
+function P.CanPreviewTack()
+    if type(Tack)~='table' or type(Tack.CatalogBySlot)~='table' or type(Tack.PieceOrder)~='table'
+        or type(Tack.GetItem)~='function' or type(HorseAppearance)~='table'
+        or type(HorseAppearance.applyLoadout)~='function' then return false end
+    for _,slot in ipairs(Tack.PieceOrder) do
+        if type(Tack.CatalogBySlot[slot])~='table' or #Tack.CatalogBySlot[slot]==0 then return false end
+    end
+    return true
+end
 local function delete(p)
     retiring[p]=nil
-    if p.entity and DoesEntityExist(p.entity) then DeleteEntity(p.entity) end
+    if p.entity then
+        if HorseAppearance and HorseAppearance.resetTracking then HorseAppearance.resetTracking(p.entity) end
+        if DoesEntityExist(p.entity) then DeleteEntity(p.entity) end
+    end
+end
+local function copyTack(loadout)
+    local copy={}
+    for slot,item in pairs(loadout or {}) do copy[slot]={catalogId=item.catalogId} end
+    return copy
+end
+local function applyTack(p)
+    if not next(p.loadout or {}) and not p.tackApplied then return true end
+    if not P.CanPreviewTack() then return false end
+    HorseAppearance.applyLoadout(p.entity,p.loadout or {})
+    p.tackApplied=next(p.loadout or {})~=nil
+    return true
 end
 local function applyGender(p)
     if p.gender~='male' and p.gender~='female' then return end
@@ -22,13 +46,74 @@ end
 function P.SetGender(gender)
     local p=active
     if not p or (gender~='male' and gender~='female') or p.gender==gender or not DoesEntityExist(p.entity) then return end
-    p.gender=gender;applyGender(p);clean(p.entity)
+    p.gender=gender;applyGender(p);applyTack(p);clean(p.entity)
     CreateThread(function()
         Wait(300)
         if active==p and p.gender==gender and DoesEntityExist(p.entity)
             and GetEntityModel(p.entity)==GetHashKey(p.modelKey) then clean(p.entity) end
     end)
 end
+-- Only the menu's exact local owned-horse preview can receive catalog components.
+-- A repeated selection is a no-op so rotation and idle animation remain intact.
+function P.SetTack(token,siteId,horseId,slot,catalogId)
+    if not P.CanPreviewTack() or not Tack.PieceSlots[slot] then return false end
+    local p=active
+    local item=catalogId and Tack.GetItem(catalogId)
+    if not p or not P.IsShowing(token,siteId,horseId,p.modelKey)
+        or GetEntityModel(p.entity)~=GetHashKey(p.modelKey)
+        or catalogId~=nil and (not item or item.slot~=slot) then return false end
+    p.loadout=p.loadout or {}
+    if catalogId and Tack.PieceSlots[slot].requiresSaddle and not p.loadout.saddle then return false end
+    if (p.loadout[slot] and p.loadout[slot].catalogId)==catalogId then return true end
+    p.loadout[slot]=catalogId and {catalogId=catalogId} or nil
+    applyTack(p);clean(p.entity)
+    return true
+end
+-- Preview an owned saddle with its attached pieces, retaining saved restore state.
+function P.SetAssembly(token,siteId,horseId,catalogId,parts)
+    if not P.CanPreviewTack() then return false end
+    local p=active
+    if not p or not P.IsShowing(token,siteId,horseId,p.modelKey)
+        or GetEntityModel(p.entity)~=GetHashKey(p.modelKey) then return false end
+    local chosen={saddle=catalogId and {catalogId=catalogId} or nil}
+    for _,slot in ipairs({'stirrups','saddle_horn'}) do
+        local item=catalogId and parts and parts[slot]
+        chosen[slot]=item and {catalogId=item.catalogId} or nil
+    end
+    local changed=false
+    for _,slot in ipairs({'saddle','stirrups','saddle_horn'}) do
+        local item=chosen[slot] and Tack.GetItem(chosen[slot].catalogId)
+        if chosen[slot] and (not item or item.slot~=slot) then return false end
+        local previous=p.loadout and p.loadout[slot]
+        if (previous and previous.catalogId)~=(chosen[slot] and chosen[slot].catalogId) then changed=true end
+    end
+    if not changed then return true end
+    p.loadout=p.loadout or {}
+    for _,slot in ipairs({'saddle','stirrups','saddle_horn'}) do p.loadout[slot]=chosen[slot] end
+    applyTack(p);clean(p.entity)
+    return true
+end
+function P.SetSaddle(token,siteId,horseId,catalogId)
+    return P.SetTack(token,siteId,horseId,'saddle',catalogId)
+end
+function P.SetSavedTack(token,siteId,horseId,loadout)
+    local p=active
+    if not p or not P.IsShowing(token,siteId,horseId,p.modelKey) then return false end
+    for slot,item in pairs(loadout or {}) do
+        local catalog=type(item)=='table' and Tack.GetItem(item.catalogId)
+        if not Tack.PieceSlots[slot] or not catalog or catalog.slot~=slot then return false end
+    end
+    p.savedLoadout=copyTack(loadout);p.loadout=copyTack(loadout)
+    applyTack(p);clean(p.entity)
+    return true
+end
+function P.RestoreTack(token,siteId,horseId)
+    local p=active
+    if not p or not P.IsShowing(token,siteId,horseId,p.modelKey) then return false end
+    p.loadout=copyTack(p.savedLoadout);applyTack(p);clean(p.entity)
+    return true
+end
+
 local function fade(p,target,current,finished)
     local initial=p.alpha or 255
     CreateThread(function()
@@ -66,8 +151,10 @@ function P.IsShowing(token,siteId,horseId,modelKey)
         and p.entity~=nil and DoesEntityExist(p.entity)
         and p.camera~=nil and DoesCamExist(p.camera)
 end
-function P.Show(token,siteId,modelKey,isCurrent,horseId,gender)
-    if isCurrent(token) and P.IsShowing(token,siteId,horseId,modelKey) then P.SetGender(gender);return end
+function P.Show(token,siteId,modelKey,isCurrent,horseId,gender,tack)
+    if isCurrent(token) and P.IsShowing(token,siteId,horseId,modelKey) then
+        P.SetGender(gender);if tack then P.SetSavedTack(token,siteId,horseId,tack) end;return
+    end
     sequence=sequence+1
     local request=sequence
     local site=StableLocations[siteId]
@@ -102,7 +189,7 @@ function P.Show(token,siteId,modelKey,isCurrent,horseId,gender)
             Wait(delay)
             if active~=p or not isCurrent(token) or not DoesEntityExist(p.entity)
                 or GetEntityModel(p.entity)~=model then return end
-            applyGender(p);clean(p.entity)
+            applyGender(p);applyTack(p);clean(p.entity)
         end
     end)
     -- Menu v2 captures movement input. Leave player freeze state to its owner;
@@ -118,6 +205,7 @@ function P.Show(token,siteId,modelKey,isCurrent,horseId,gender)
     local fov=setting('fov',math.deg(2*math.atan(setting('referenceDistance',4.75)/distance*math.tan(math.rad(setting('referenceFov',42)/2)))))
     SetCamFov(p.camera,math.max(setting('minimumFov',30),math.min(setting('maximumFov',65),fov)))
     SetCamActive(p.camera,true); RenderScriptCams(true,false,0,true,false,0); DisplayRadar(false)
+    if tack then P.SetSavedTack(token,siteId,horseId,tack) end
     fade(p,255,function() return active==p and isCurrent(token) end,function() ResetEntityAlpha(p.entity) end)
 end
 function P.StopRotation()

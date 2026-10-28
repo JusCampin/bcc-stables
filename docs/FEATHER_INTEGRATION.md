@@ -1,5 +1,923 @@
 # Feather integration progress
 
+## Stable tack storage accepted live - 2026-10-28
+
+Maintainer reports storage all seems to be working. This accepts the requested
+storage test flow at the reported level; no individual piece IDs, balances or
+condition values were supplied. Do not invent additional measurements or claim
+live fault/concurrency testing.282 Stables tests,17 provider transaction tests
+and the Inventory Lua suite remain separate offline evidence. No repeat deployment
+or basic storage test is needed. Stable shop resale and nearby-player trading are
+next; neither is implemented yet.
+
+## Stable tack storage ready for live test - 2026-10-28
+
+The private character collection is now implemented. Existing eligible tack moves
+out of carried Inventory on first tack access/recall, with original item IDs,
+metadata/condition, equipment anchors and assemblies intact. Custody changes increment
+row revisions once. Repeated access does not move/revise again. New paid tack orders
+snapshot collectionKey and grant directly into storage; old order/grant payloads and
+receipts remain compatible, adopting historical carried deliveries without regrant.
+The same collection is available from every stable. Food/brushes remain carried.
+
+Inventory owns one private container and mapping per caller/purpose/character. The
+configured bcc-stables / stables.tack.v1 policy allows four established tack item names
+and a stablesTackOrder marker, default 500 collection slots. Generic client open/read/
+insert/remove/manage is refused; ordinary carried-item APIs remain unchanged. Scoped
+collection reads and equipment rederive ownership. Migration uses locked rows,
+existing instance-change holds and bounded UPDATE batches in one transaction; rollback
+retains the originals. Stables adds no duplicate item/custody table or new worker.
+
+282 Stables tests,17 Inventory provider transaction tests and the existing full
+Inventory Lua suite pass;80 runtime Lua files parse. Coverage includes adoption,
+unchanged condition/assemblies, unrelated/foreign-item exclusion, limits/rollback,
+scoped item/equipment reads, restart, direct grants with full carried inventory,
+old/new receipt replay and private ACL refusal. Native/CFX/MariaDB live acceptance
+is pending. No shop resale or player trading yet.
+
+Required runtime copies (source -> relative server resource destination):
+
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/tack/feather.lua` -> `bcc-stables/server/tack/feather.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua` -> `bcc-stables/client/core/locale.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua` -> `bcc-stables/client/ui/stable.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/character_collections.lua` -> `feather-inventory/server/services/character_collections.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/api.lua` -> `feather-inventory/server/services/api.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/equipment.lua` -> `feather-inventory/server/services/equipment.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/grants_once.lua` -> `feather-inventory/server/services/grants_once.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/instances.lua` -> `feather-inventory/server/services/instances.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/inventory_access.lua` -> `feather-inventory/server/services/inventory_access.lua`
+
+Required config merge: the TrustedCharacterCollections block from
+C:/coding/feather-scripts/feather-inventory/config.lua into server
+feather-inventory/config.lua, preserving all other settings and allowlists.
+Keep existing tack, commerce, care and unique-grant settings. Inventory creates
+inventory_character_collections during startup; no manual SQL or Stables migration.
+
+Before replacing files, note an existing assembly's piece IDs/condition in Horse
+Tack. Close menus; if a horse is active, player F8 BccStablesHorseStore and wait for
+disappearance. After copying/config merge, server console in order:
+refresh; restart feather-inventory; restart bcc-stables; BccStablesStatus.
+Refresh is required for the newly added service under the existing script glob;
+no manifest copy or full-server restart. Documentation/tests remain local.
+
+Live gate: open Horse Tack, verify same pieces/condition/assembly and absence of
+those tack pieces from carried Inventory (default I key; food/brushes remain).
+Equip/take out/store and confirm disappearance. Reopen stable, verify persistence,
+and buy one inexpensive tack piece: exactly one charge/item, delivered to My Tack
+without a carried entry. Finish with no active horse. Sale/trade follows acceptance.
+
+## Saddle assemblies accepted live - 2026-10-28
+
+Maintainer confirms all requested assembly checks worked correctly: saddle moves
+carry fitted horn/stirrups, replacement preserves the previous assembly, unequip/
+re-equip preserves attachments, individual components detach/refit, native recall
+restores equipment, and final Store removes the horse. No additional IDs, balances
+or condition values were provided.277 offline Stables tests and four provider
+transaction tests remain separate evidence for injected failures; those cases
+were not independently accepted live. No repeat deployment or assembly test needed.
+Dedicated character-owned stable tack storage is next; tack still occupies carried
+Inventory space. Selling/trading follows the custody model.
+
+## Saddle assemblies ready; stable storage next - 2026-10-27
+
+Maintainer confirmed all four previous tack-category checks worked. New assembly
+behavior is implemented and offline-tested, awaiting live acceptance: a saddle
+carries fitted horn/stirrups through equip, move, replacement and unequip; old
+assemblies remain together in the collection. Remove from Saddle releases each
+individual component. Saddlecloths stay separate. Preview applies an assembly in
+one component update, retaining saved restore state. Character ownership, item IDs,
+metadata/condition and receipts are unchanged. No repurchase or new item is needed.
+
+Inventory persists attachments as generic equipment slots keyed by parent instance;
+parked saddle slots protect unequipped assemblies with existing locked move/destroy
+guards. Its additive SetEquipmentBatchForCharacter uses one transaction, expected
+source/destination IDs, ownership locks and instance-change guards. Existing single
+slot APIs are unchanged. Per-horse legacy components convert per saddle under an
+atomic parent/part comparison; lost replies are inspected on the next read.
+277 Stables tests, four new real-Lua/SQLite provider tests and the existing complete
+Inventory Lua suite pass. MariaDB/CFX/native concurrency remains a live gate.
+
+This is the first test gate, not completed dedicated storage: items still occupy
+carried Inventory. Stable-only character custody requires provider reads/grants/
+capacity/equipment ownership to recognize dedicated containers (current character
+item APIs explicitly require inventory.character_id). Implement this after assembly
+acceptance; shop resale/player trading follow custody. Do not hide UI rows while
+leaving items charged to carried capacity or introduce a duplicate ownership table.
+
+Required runtime copies, to matching paths inside each server resource:
+
+- `C:/coding/bcc-feather-scripts/bcc-stables/shared/tack.lua` -> `bcc-stables/shared/tack.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/tack/feather.lua` -> `bcc-stables/server/tack/feather.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/ui/stable.lua` -> `bcc-stables/server/ui/stable.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua` -> `bcc-stables/client/core/locale.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/ui/preview.lua` -> `bcc-stables/client/ui/preview.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua` -> `bcc-stables/client/ui/stable.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/equipment.lua` -> `feather-inventory/server/services/equipment.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/api.lua` -> `feather-inventory/server/services/api.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/instances.lua` -> `feather-inventory/server/services/instances.lua`
+
+Close stable menus; if a horse is active, player F8 BccStablesHorseStore and wait
+for disappearance before replacing files. Server console in order:
+restart feather-inventory; restart bcc-stables; BccStablesStatus.
+No manifest/script-list change, refresh, SQL, config or full-server restart required.
+Documentation/tests are optional local development files, not runtime copies.
+
+Live gate: use existing saddled horses and pieces. Move a fitted saddle to another
+owned horse; confirm horn/stirrups travel and the destination's previous assembly
+remains intact. Unequip/re-equip that saddle and verify parts stay linked. Remove
+one part through its category and refit it independently. Take out to verify native
+restoration, then player F8 BccStablesHorseStore and confirm disappearance. No repeat
+purchase is needed. Stop at this gate before dedicated storage implementation.
+
+## Stable saddle default parts - 2026-10-27
+
+Saddle presets no longer choose implicit horn/stirrup visuals: shared Tack.SaddleDefaults
+selects Stirrup 1 and Saddle Horn 1 when no owned upgrade is assigned. Preview and
+recall use the same map; upgrades override defaults and no saddle means no default
+parts. These are included visuals, not new owned items.271 offline tests pass; native
+refresh/recall appearance pending live test. Copy shared/tack.lua and
+client/tack/controller.lua to matching bcc-stables server paths, store active horse
+and await disappearance, then restart bcc-stables. No refresh/SQL/config required.
+
+## Additional tack categories ready for live testing - 2026-10-27
+
+Saddlecloths (66), stirrups (54) and saddle horns (67) reuse the saddle purchase,
+receipt, equipment, preview and recall flow. Character ownership and item condition
+are preserved when moving pieces. My Tack filters by category. Saddlecloths are
+independent; custom horns/stirrups require a saddle. Unequip these dependents before
+removing/moving their parent saddle. Saddle Default restores preset parts while
+retaining the custom item. Existing saddle.v1 receipts and horse_<UUID> assignments
+remain compatible; new orders snapshot category/item name as tack.v1.
+
+270 offline tests pass, including all categories, independent moves, parent guards,
+full-loadout restoration, idempotent seeds and old receipt compatibility. New-category
+native rendering and paid live acceptance remain pending; saddles are already accepted.
+No Inventory/Economy changes, new worker or migration-ledger change.
+
+Required runtime copies (absolute local source -> relative server resource destination):
+
+- `C:/coding/bcc-feather-scripts/bcc-stables/fxmanifest.lua` -> `bcc-stables/fxmanifest.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/config/tack/categories/saddlecloths.lua` -> `bcc-stables/config/tack/categories/saddlecloths.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/config/tack/categories/stirrups.lua` -> `bcc-stables/config/tack/categories/stirrups.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/config/tack/categories/saddle_horns.lua` -> `bcc-stables/config/tack/categories/saddle_horns.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/shared/tack.lua` -> `bcc-stables/shared/tack.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/tack/feather.lua` -> `bcc-stables/server/tack/feather.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/ui/stable.lua` -> `bcc-stables/server/ui/stable.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua` -> `bcc-stables/client/core/locale.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/tack/controller.lua` -> `bcc-stables/client/tack/controller.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/ui/preview.lua` -> `bcc-stables/client/ui/preview.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua` -> `bcc-stables/client/ui/stable.lua`
+
+Run `C:/coding/bcc-feather-scripts/bcc-stables/database/feather_tack.sql` in the
+existing Feather database using your database client. It inserts only missing item
+definitions and preserves existing pieces. Keep existing tack/commerce enablement and
+Inventory unique-grant trust. No configuration changes or provider restart required.
+
+Before deployment, close the stable menu and, only if a horse is active, run
+`BccStablesHorseStore` in player F8 and wait for disappearance. After copies/SQL,
+server console in order: `refresh`, `restart bcc-stables`, `BccStablesStatus`.
+Refresh is required for the three newly loaded catalog scripts. No full server restart.
+Documentation/tests remain local and are optional deployment files.
+
+Live test: on a saddled horse buy/equip one piece from each new category, verify all
+appear together, close/take out and verify recall. Store and wait for disappearance.
+Move the same pieces to another owned saddled horse, checking no repurchase and
+correct source/destination appearances. Check Saddle Default and parent-removal
+refusal. Finish with `BccStablesHorseStore` and confirmed disappearance.
+
+## Character-owned saddle flow accepted live - 2026-10-27
+
+Maintainer confirms all steps in the requested saddle test worked correctly:
+one purchase charge and one character-owned piece, explicit equip on horse A,
+saved saddle visible on recall, Store, moving the same piece to owned horse B
+without another charge, removal from A and restoration on B, and final Store
+with disappearance. This accepts the controlled purchase/equip/move/recall/cleanup
+flow. No detailed numeric item/horse IDs, balances or condition revisions were
+provided; do not invent them. Offline259 tests remain the evidence for injected
+lost replies, revision races and restart cases; those were not separately tested
+live here. No repeated saddle test or deployment is needed. Other tack categories
+and passive equipment wear remain future work.
+
+## Character-owned saddle checkout/equipment ready - 2026-10-27
+
+The Horse Tack tab now offers Browse Saddles and My Saddles. Catalog review ->
+explicit quoted confirmation charges Economy once and delivers one character-owned
+unique Inventory piece. Buying does not auto-equip. Equip/Unequip moves the same
+piece between stored owned horses, preserves item identity/metadata/condition and
+removes the prior assignment without another purchase. Cross-horse moves require
+confirmation. Inventory generic equipment slots horse_<horse UUID> are authoritative;
+there is no second Stables item or loadout table. Normal preview/recall reads and
+validates equipment and restores components. Preview experiments restore saved
+gear on leaving. Existing native association/riding/care is retained.
+
+One optional fs_tack_orders table stores immutable saddle quote/payment/delivery
+terms. Existing Economy Transfer and Inventory GrantCharacterUniqueItemOnce receipts
+recover lost replies without another debit/item. Recovery uses the existing bounded
+checkout worker, rotating stalled orders and remaining idle when none are pending.
+Existing base schema11 ledger is unchanged. Equipment uses Inventory's data-only
+MutateItem read/revision fence, then its atomic generic equipment API while holding
+Stables' character/call admission lock. Provider transaction handles never cross
+CFX, and no Inventory/Economy SQL is read or written directly. Synchronous guards
+block item moves/destruction while equipped, and block pending metadata changes;
+move/destroy use Inventory's locked equipment snapshots even after resource restart.
+Uncertain assignment outcomes are read back. A resource stop unregisters guards;
+recall revalidates actual ownership, so stale/foreign/deleted pieces never produce
+a native copy. Stopping Inventory also stops physical calls and closes stable menus; restart
+Stables after restarting Inventory to rebind its API/guards.
+
+Startup checks Inventory readiness/capability, configured condition key/range,
+active unique saddle definition and opt-in grant authorization before admitting
+checkout. The authorization check submits an invalid empty payload, which the
+verified provider rejects before receipt SQL; no item/operation is created.
+Known inventory capacity failure refuses before payment. A capacity race after
+payment leaves the original paid order pending until delivery is possible; no
+invented refund or replacement operation is created. Status includes bounded tack
+recovery summaries. Tack condition starts at Inventory's configured maximum;
+passive equipment wear/trading between characters are not added in this slice.
+
+259 offline tests pass: purchase replay and payment/delivery lost replies, reload
+recovery, source/destination/ownership/revision/movement guards, capacity refusal,
+free policy, character collection retention, explicit cross-horse moves, saved
+preview restoration and physical-bind application. Provider behavior is doubled
+and SQL admission/order tests use SQLite: native/CFX/MariaDB paid-saddle acceptance
+remains pending. No new proof command or Inventory source change is required.
+
+Required runtime copies (same relative resource paths):
+- `C:\coding\bcc-feather-scripts\bcc-stables\fxmanifest.lua` -> `bcc-stables/fxmanifest.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\client\core\locale.lua` -> `bcc-stables/client/core/locale.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\client\horse\controller.lua` -> `bcc-stables/client/horse/controller.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\client\ui\preview.lua` -> `bcc-stables/client/ui/preview.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\client\ui\stable.lua` -> `bcc-stables/client/ui/stable.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\server\core\boot.lua` -> `bcc-stables/server/core/boot.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\server\horse\controller.lua` -> `bcc-stables/server/horse/controller.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\server\horse\checkout.lua` -> `bcc-stables/server/horse/checkout.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\server\ui\stable.lua` -> `bcc-stables/server/ui/stable.lua`
+- `C:\coding\bcc-feather-scripts\bcc-stables\server\tack\feather.lua` -> `bcc-stables/server/tack/feather.lua`
+
+Required configuration: merge Config.tack.enabled=true from
+C:/coding/bcc-feather-scripts/bcc-stables/config/settings.lua into the server's
+bcc-stables/config/settings.lua; keep commerce.purchasesEnabled=true for paid
+checkout and preserve current care/other settings. In feather-inventory/config.lua
+ensure Config.TrustedUniqueGrantCallers['bcc-stables']=true after its existing
+initializer (provider source reference C:/coding/feather-scripts/feather-inventory/config.lua).
+Do not overwrite that config wholesale. If this already matches, no Inventory
+restart is needed. Economy's existing trusted Stables transaction/account access
+and stables.tack_purchase/stables_order scope are reused; no Economy change.
+
+Database client: run C:/coding/bcc-feather-scripts/bcc-stables/database/feather_tack.sql
+against the existing Feather database before enabling tack. This creates the one
+optional order table and inserts a missing unique horse_saddle definition without
+altering existing definitions. It does not run VORP SQL or automatically change
+schema11 evidence. SQL is an installation input; docs/tests stay local.
+
+Commands, in order: close the current stable menu; if an active horse exists,
+player F8 BccStablesHorseStore and wait for disappearance. After copies/SQL/config,
+server console stop bcc-stables, then restart feather-inventory ONLY if its config
+changed; then refresh (new server manifest entry), start bcc-stables, BccStablesStatus. Expect ready,
+features.tack=true and tack.ready=true. No full server restart or UI build.
+
+First live gate: select horse A in My Horses, Horse Tack -> Browse Saddles ->
+choose one -> review/confirm purchase. Verify one charge and one piece in My
+Saddles. Equip, close and take out A through the normal menu; verify appearance.
+Store A, reopen, select owned horse B, choose the SAME piece in My Saddles and
+confirm its move (no second purchase/charge). Verify A no longer wears it and B
+recalls wearing it. Finish by storing B and confirming disappearance. Stop here
+for this test; other tack categories and passive durability are later work.
+
+## Tack ownership requirement clarified - 2026-10-27
+
+Maintainer explicitly confirms characters own tack independently of horses.
+Purchased pieces must have stable identity/condition; horse loadouts reference
+them, with at most one equipped horse per piece. Moving between owned horses
+changes assignment without repurchasing; unequipping preserves character
+ownership. Preserve the original character-owned design when adapting checkout
+and loadout persistence to Feather. Do not implement horse-bound cosmetic unlocks.
+This is a planning clarification; no runtime/deployment/test change.
+
+## Saddle cleanup live-confirmed - 2026-10-27
+
+Maintainer reports saddles are working after the preset horn/stirrup cleanup and
+Horse Tack top-tab update. Saddle preview/cleanup accepted at this reported scope;
+no separate detailed tab/locale/empty-selection result was supplied. Offline239
+tests remain the automated coverage. No repeat saddle-preview test or deployment
+is needed. Tack purchases, character-owned equipment and saved loadouts remain
+next implementation work; preview choices do not persist or charge currency.
+
+## Saddle attachments cleanup and Tack tab - 2026-10-27
+
+Maintainer confirmed the previous missing helpers came from an omitted manifest
+upload. Live saddle browsing now renders, but No Saddle left preset horn/stirrups.
+The preserved appearance helper now removes both dependent categories whenever a
+saddle is removed/replaced, including presets whose parts never had individual
+loadout entries. Full loadout application still reapplies explicitly chosen parts.
+Other component categories are preserved. Native cleanup retest remains pending.
+
+Horse Tack is now the third top tab, for the selected stored horse, with fresh
+owned-read validation. Removed the Details button. No selection produces guidance
+to select a horse in My Horses; expired selection/active horse is refused. Tabs
+share the same route and preview and are bounded to three anchors/one active page.
+Back returns to My Horses; leaving Tack clears temporary saddle components.
+239 tests pass, including dependency cleanup, explicit-part reapplication, top-tab
+navigation, empty selection and preserved preview identity.
+
+Copy runtime files C:\coding\bcc-feather-scripts\bcc-stables\client\tack\controller.lua,
+C:\coding\bcc-feather-scripts\bcc-stables\client\ui\stable.lua and
+C:\coding\bcc-feather-scripts\bcc-stables\client\core\locale.lua to server resource
+paths bcc-stables/client/tack/controller.lua, bcc-stables/client/ui/stable.lua and
+bcc-stables/client/core/locale.lua respectively. Server console: restart bcc-stables.
+No manifest/new-script change, refresh, SQL, config/provider change or full restart.
+Docs/tests stay local. Open stable, select an owned horse in My Horses, then use
+the Horse Tack top tab. Cycle saddles -> No Saddle and verify saddle/horn/stirrups
+are all gone; repeat while switching tabs and confirm the same clean preview.
+
+## Tack helper loading failure contained - 2026-10-27
+
+Live client reported both Tack and HorseAppearance globals missing. Root cause in
+the deployed resource is not established; the local manifest order is correct.
+Added an executable manifest-order regression proving the catalog179 and appearance
+helper initialize before preview. Ordinary preview/cleanup no longer depend on
+optional tack work when no saddle is selected; missing helpers refuse the tack
+page with a localized loading message while preserving Details/close. 236 tests
+pass, including missing-helper preview cleanup and menu refusal. Native saddle
+rendering remains pending. Recopy the eight runtime files listed below to matching
+server paths, then server console: stop bcc-stables; refresh; start bcc-stables.
+Check startup for any script-load errors before opening the normal stable menu.
+No SQL/config/provider changes or full server restart required.
+
+## Saddle catalog preview ready for live test - 2026-10-27
+
+Audited the preserved catalog, component helper, tack session, service and
+repository alongside current Feather owned reads, checkout and menu lifecycle.
+The legacy numeric-character tack tables/callback/payment/refund flow cannot be
+loaded into the UUID/Assets/receipt runtime. First production UI slice reuses the
+179 original saddles, stable catalog IDs, prices, component apply/remove natives
+and current menu/preview. Owned stored-horse Details -> Horse Tack offers arrows,
+No Saddle, position counter, catalog price and existing smooth rotation. No saddle
+purchase, ownership grant or saved equipment is claimed. No new test command.
+
+The exact preview identity/model is required; duplicate selection avoids native
+work. Back/tab navigation removes the temporary saddle, close/stop deletes the
+preview and resets helper tracking, and bounded metaped follow-ups reapply the
+chosen saddle. Language changes retain selection through Core/settings, with
+English fallback. No server route, idle loop, SQL/config enablement or provider
+change. Existing schema11 remains untouched. Offline tests cover stale identity,
+same preview reuse, removal, delayed variation, navigation and locale behavior;
+actual saddle appearance remains a live gate.
+
+Runtime source root: C:\coding\bcc-feather-scripts\bcc-stables. Copy these exact
+paths to the same relative paths in the server bcc-stables resource:
+fxmanifest.lua; config/tack/catalog.lua; config/tack/categories/saddles.lua;
+shared/tack.lua; client/tack/controller.lua; client/core/locale.lua;
+client/ui/preview.lua; client/ui/stable.lua. Preserve any existing custom tack
+currency/catalog prices. Documentation/tests stay local. Server console: refresh,
+then restart bcc-stables (manifest script list changed; no full server restart).
+Open the stable through its normal interaction, expand an owned horse, choose
+Stats & Details -> Horse Tack. Cycle several saddles, rotate, choose No Saddle,
+then Back and switch to Browse Horses to verify no saddle carries over. Close
+normally and verify input/radar return and no preview remains. No F8/SQL command
+or test purchase is required for this slice. Stop here for native presentation
+acceptance before adapting tack purchases and persistent equipment.
+
+## Final-use brushing accepted live - 2026-10-27
+
+A separate brush granted with condition1 reported worn out after completed
+Inventory-use brushing. Saved health remained100; stamina83 ->93, revision7 ->8.
+Maintainer confirmed physical horse disappearance after Store. This accepts the
+live final-use result and saved benefit; concurrent/lost-reply/restart wear cases
+remain covered by automated simulations rather than this manual run. The report
+does not separately confirm the original98-condition brush or inspect item removal.
+No runtime change or repeat brushing cycle is required.
+
+## Mounted brushing accepted live - 2026-10-27
+
+Maintainer confirmed brushing worked while mounted on their own horse. Logs show
+brush condition99 ->98/100 and saved health100/stamina73 ->83 revision7. The call
+restored the prior100/73 revision6 first. This accepts mounted native presentation
+and one condition-point wear with the configured +10 capped core benefit. Maintainer subsequently confirmed physical disappearance after the final
+Store, completing the mounted-brushing cycle. No new runtime/config/deployment or repeat mounted
+brush test is needed. Offline suite remains227 tests.
+
+
+## Brushing live acceptance and mounted-owner permission - 2026-10-27
+
+Maintainer reports brushing worked: walking away cancelled, mounted attempt was
+refused under the previous rule, completed dismounted brush reported99/100 and
+saved health100/stamina73 revision6 (from100/63 revision5). Store was requested;
+final disappearance has not yet been explicitly confirmed for this cycle.
+Maintainer requested that brushing also be allowed from their own saddle.
+
+Both server care observations now use the existing owner-mounted permission for
+brush as well as food. Client animation eligibility matches that rule. Foreign
+riders, another mount, leading and scripted follow/approach remain refused.
+Store still requires dismounting. The brush occupancy message no longer tells
+the owner to dismount. Original native brush animation is unchanged; its mounted
+presentation needs live confirmation. 227 offline tests pass, including both
+server care checks allowing owner-mounted use and mounted brush initiation.
+No Inventory, configuration, SQL, manifest or receipt changes.
+
+Required runtime sources -> destinations relative to server resources:
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\feeding.lua -> bcc-stables/server/horse/feeding.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua -> bcc-stables/client/horse/feeding.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\core\locale.lua -> bcc-stables/client/core/locale.lua
+Docs/tests stay local. No refresh needed. Confirm the previously stored horse
+has disappeared; if still out, dismount and player F8 BccStablesHorseStore first.
+After copying, server console restart bcc-stables. Player F8 BccStablesHorseCall;
+mount your own horse, Inventory I -> right-click brush -> Use; stay near for five
+seconds. Verify mounted animation, one condition point spent and capped +10/+10
+saved cores. Dismount; player F8 BccStablesHorseStore; confirm disappearance.
+No need to repeat the already-accepted walk-away cancellation check.
+
+
+## Inventory condition convention correction - 2026-10-27
+
+Maintainer correctly identified existing Inventory condition support. The new
+wear receipt wrapper is needed for durable once-only wear/cancellation/recovery,
+not a replacement condition system. Corrected the initially separate durability
+metadata field: wear now uses Config.Condition.Key (default condition), respects
+Config.Condition.Max and preserves other metadata. The advertised ready contract
+includes conditionKey/conditionMaximum so Stables validates against the same
+provider convention. Existing GetCondition/SetCondition/AdjustCondition APIs are
+unchanged. No separate condition table or durability metadata system is added.
+227 Stables tests and full Inventory suite pass, now20 receipt cases including a
+custom condition-key regression. Wear/native/live brush acceptance remains pending.
+Runtime correction affects the same two files already in the brush handoff:
+C:\coding\feather-scripts\feather-inventory\server\services\consumption_once.lua
+and C:\coding\bcc-feather-scripts\bcc-stables\server\horse\feeding.lua. No
+additional deployment request is made by this explanatory checkpoint.
+
+
+## Inventory brushing and Feather item definitions - 2026-10-27, ready for test
+
+Brushing reuses the feeding module's exact-item Inventory callback, one-character
+queue, current simulator eligibility, core depletion checkpoint, five-second
+animation/cancellation, existing schema-11 reservation/effect/recovery and saved
+condition delivery. No new Stables runtime module, frame worker or proof command.
+Original Interaction_Brush/p_brushHorse02x is used. Brushing requires dismounting;
+feeding still allows the owner in the saddle. A committed brush delivery cleans
+dirt, damage decals and blood only on the exact controlled horse. Full cores
+still permit cleaning, with the configured wear. Defaults: +10/+10 core points,
+maximum brush durability100, cost1; these reuse Config.items.brush durability
+settings. Config.brushing.enabled defaults false. No XP/progression added.
+
+Inventory's existing consumption receipt service now also offers durable tool
+wear (GetConsumptionContract.durableWear1; WearCharacterItemOnce,
+InspectCharacterItemWear, CancelCharacterItemWear). It uses the SAME receipt
+schema and ordered receipt/item transaction, with separate wear fingerprints and
+immutable wear/max terms. Existing consumption requests/results are unchanged.
+A tool uses Inventory's configured condition key (default metadata.condition),
+defaulting to the configured maximum when absent,
+preserves unrelated metadata, and wears once. Final use atomically removes the
+broken instance and commits a used receipt. Cancellation-first wears nothing;
+consumed/used outcomes win over later cancellation. Stables records the validated
+receipt with its terminal local effect for replayed durability/break reporting.
+Provider policy remains per-caller/purpose/item default deny. No new provider
+migration, service file or manifest entry is needed. Existing stack/unique ordinary
+tools are supported, but differing durability needs independent slots; fresh
+horsebrush definitions have max_stack_size1. Split old multi-brush stacks before
+use rather than mutating every brush or silently migrating owned inventory.
+
+Added database/feather_items.sql for the Feather categories/items schema. It
+idempotently inserts missing horsebrush, haycube/carrot/apple, oil_lantern,
+consumable_horse_reviver and diamond definitions with established names. Existing
+definitions/owned instances are preserved. Lantern/reviver/diamond are seeded
+unusable because their gameplay is still unloaded. This does not activate them.
+Never run the VORP database/schema.sql on Feather; the new file has no horse DDL.
+
+227 Stables offline tests pass; Inventory's full Lua suite passes (79 runtime
+files parse,19 receipt cases including8 wear cases). Coverage includes wear once,
+metadata preservation, break/reload replay, cancellation, lost replies, rollback,
+per-policy binding, guard/exhaustion refusal, zero-wear policy, Stables recovery,
+full-core cleaning, mounted refusal and exact native cleaning. SQL seed insert/
+idempotency/non-overwrite semantics pass on SQLite; actual MariaDB seed and wear
+metadata/removal acceptance are pending. No stage/commit/push performed.
+
+Required runtime sources -> destinations relative to server resources:
+- C:\coding\feather-scripts\feather-inventory\server\services\consumption_once.lua -> feather-inventory/server/services/consumption_once.lua
+- C:\coding\feather-scripts\feather-inventory\server\services\api.lua -> feather-inventory/server/services/api.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\controller.lua -> bcc-stables/client/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua -> bcc-stables/client/horse/feeding.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\core\locale.lua -> bcc-stables/client/core/locale.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\controller.lua -> bcc-stables/server/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\feeding.lua -> bcc-stables/server/horse/feeding.lua
+
+Merge Config.brushing from local C:\coding\bcc-feather-scripts\bcc-stables\config\settings.lua
+into deployed bcc-stables/config/settings.lua, set enabled=true and keep health10/
+stamina10. Preserve existing feeding/commerce settings. Existing Config.items.brush
+keeps name horsebrush, durabilityEnabled=true, maximumDurability100 and wear1.
+In deployed feather-inventory/config.lua, preserve the feeding purpose and add:
+
+```lua
+Config.TrustedConsumptionCallers['bcc-stables']['stables.brush.v1'] = { horsebrush = true }
+```
+
+Run C:\coding\bcc-feather-scripts\bcc-stables\database\feather_items.sql in the SQL
+client connected to the Feather server database, once. Read the result set to
+verify definitions; it does not overwrite pre-existing settings. It can be opened
+locally in the database client; copying it to the resource is not required. No
+manual receipt-table migration, refresh, frontend build or full server restart.
+Docs/tests remain local. Existing manifests already load all changed runtime files.
+
+Before copying/restarting, if horse out: dismount; player F8 BccStablesHorseStore;
+confirm disappearance. Server console stop bcc-stables. After copying/settings/SQL,
+server console in order: restart feather-inventory; ensure bcc-stables;
+BccStablesStatus. Expected ready/care=true. Inventory restart loads its API/policy.
+
+Test with ONE horsebrush in its own Inventory slot. If needed and existing DevMode
+and staff ACE already permit it, player F8 AddItems horsebrush 1. Otherwise obtain
+one through the existing authorized admin grant UI; do not change ACE/DevMode just
+for this test. Player F8 BccStablesHorseCall. Dismount, stop leading/following,
+stand beside it, open Inventory I -> right-click brush -> Use. First move away
+before five seconds: cancelled, brush durability unchanged. Repeat while staying
+beside it: animation/clean coat, one wear (new brush99/100), +10/+10 saved cores
+capped100. Cores already full still permit cleaning/wear. Dismount before storing;
+F8 BccStablesHorseStore and confirm disappearance; BccStablesHorseCall to verify
+saved condition. Finish BccStablesHorseStore and confirm disappearance. Native
+brush presentation, real-item metadata wear and cancellation remain live gates.
+
+
+## Live feeding and depletion acceptance - 2026-10-27
+
+Maintainer confirmed walking away cancels feeding with no inventory loss. Live
+logs show successful feeding at health100/stamina43 revision4; normal Store and
+recall restored exactly100/43 revision4. Another feed raised stamina43 ->63
+revision5 (health stayed100), demonstrating the configured capped +20 benefit
+rather than the former stale-full refusal. Maintainer subsequently confirmed physical disappearance after the final Store,
+completing cleanup acceptance for this feeding/cancellation/store-recall cycle.
+The provided evidence does not explicitly identify mounted feeding presentation
+or a non-owner network simulator for these successful interactions; those gates
+remain separate. No additional runtime/configuration or repeated successful test
+is required to record these results. Offline suite remains217 tests from the
+preceding implementation checkpoint.
+
+
+## Native core depletion checkpoints - 2026-10-27, ready for retest
+
+Live feeding reported 90/80 -> 100/100 revision2 and refused further feeding as
+full. After riding until stamina appeared depleted, food still refused and Store/
+recall restored 100/100. Saved condition had only changed through feeding; the
+refactor lacked native-depletion capture. This is a missing state integration,
+not a new food policy or an Inventory receipt failure. Mounted food presentation
+and exact quantity/cancellation still require their separate live confirmation.
+
+Existing current-simulator occupancy replies now include bounded native health/
+stamina core readings and the last applied condition revision. Care captures
+before calculating its immutable food terms; normal Store saves before cleanup
+and retains the active horse if saving is unconfirmed. The same exact server
+observer/generation/current simulator/current session checks bind both readings.
+One short Stables transaction locks its stable/projection/condition rows and saves
+only decreases, with a condition revision increment only when values change.
+Native claims cannot grant free increases; committed care remains the increase
+path. Ownership is re-read through Assets outside the transaction. Uninitialized
+horses are not silently initialized. Pending care terms are preserved until their
+receipt resolves, rather than overwriting the reserved before/after condition.
+
+Client sets a replicated applied-core revision after spawn restoration and after
+native care application. If a recorded benefit has not reached the simulator,
+checkpointing reissues its saved condition and asks for retry instead of treating
+old native values as depletion. The latest care effect revision also protects
+benefits recovered after lost replies. Existing schema/indexes/receipt contract
+are unchanged. This adds action-boundary checkpoints, not an idle SQL/native loop
+or periodic crash recovery: abrupt termination still restores the last durable
+condition. Attribute-core values are distinct from the outer attribute bars.
+
+217 offline tests pass, including saved-full/native-stamina5 feeding to25,
+checkpoint/readback of stamina7, no native-only increases, simulator-change
+refusal, recovered-benefit protection, native reply fields, and failed Store
+checkpoint retaining the live horse. Live depletion/feeding/recall retest pending.
+
+Required runtime sources -> destinations relative to server resources:
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\controller.lua -> bcc-stables/client/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua -> bcc-stables/client/horse/feeding.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\controller.lua -> bcc-stables/server/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\feeding.lua -> bcc-stables/server/horse/feeding.lua
+No manifest/config/SQL/Inventory change or refresh required. Docs/tests stay local.
+Before copying/restarting: dismount; player F8 BccStablesHorseStore; confirm gone.
+After copying, server console restart bcc-stables. Player F8 BccStablesHorseCall;
+ride until the stamina core drops, dismount; BccStablesHorseStore, confirm gone;
+BccStablesHorseCall. The restored saved stamina should remain low. Mount your
+horse and use an apple from Inventory (I -> right-click apple -> Use), stay nearby
+for five seconds. Expect one apple consumed and +20 stamina capped at100 rather
+than already-full rejection. Dismount; BccStablesHorseStore; confirm gone. No need
+to initialize or reset the existing 100/100 record; the native observation fixes it.
+
+
+## Mounted feeding and explicit care observations - 2026-10-27
+
+Inventory callback deployment/startup accepted ready/care=true, and use reached
+Stables, but generic care_ineligible refused even beside the active horse.
+Maintainer clarified that feeding must also work from their own saddle.
+The new eligibility code no longer assumes server GetEntityHealth is a reliable
+RedM life observation; it uses current-simulator life facts as the earlier care
+implementation did. This was a potential false refusal, not a proven diagnosis
+from the prior generic message. Server observer/session/route/distance and fresh
+canonical ownership/reservation checks remain in place.
+
+The existing simulator occupancy ticket now carries a care flag and the owner's
+server-captured ped network ID. It returns ownerAlive/horseAlive and care occupancy
+under the same exact generation/observer/control checks. The owner as rider is
+allowed for care; another rider, leading or the owner riding a different horse is
+refused. Life fields are mandatory on care replies; missing/stale/wrong-simulator
+facts fail closed. Store uses the original all-riders-blocked policy unchanged.
+Client animation eligibility mirrors the owner's saddle permission. Server life
+checks are not repeated through unreliable GetEntityHealth during the animation;
+client monitoring and the final current-simulator observation protect that phase.
+
+Refusals now distinguish not-ready horse, cancelled interaction, scripted
+follow/approach movement, distance (with observed metres), unavailable simulator
+observation, life state and other-rider/leading occupancy. Existing per-recipient
+localization applies. No new diagnostic command, route, table or provider code.
+211 offline tests pass including owner-mounted animation initiation, distinct
+Store/care occupancy, foreign riders, simulator migration, mandatory life reports
+and rejection details. Native mounted animation/live feeding remain pending;
+passing simulations do not certify that presentation.
+
+Required runtime source -> destination relative to server resources:
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\controller.lua -> bcc-stables/client/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua -> bcc-stables/client/horse/feeding.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\core\locale.lua -> bcc-stables/client/core/locale.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\controller.lua -> bcc-stables/server/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\feeding.lua -> bcc-stables/server/horse/feeding.lua
+
+No manifest/config/SQL/Inventory changes or refresh required; docs/tests stay
+local. Dismount, player F8 BccStablesHorseStore, confirm disappearance before
+copying/restarting. After copying, server console restart bcc-stables. Player F8
+BccStablesHorseCall; use the original Morgan with saved90/80, stand nearby and
+use an apple from Inventory (I -> right-click apple -> Use). If refused, send the
+new exact message. If it begins, move away during five seconds and verify no food
+used. Then mount your own horse, open Inventory and Use the apple; verify the
+mounted feeding presentation completes, one apple consumed and saved condition
+improves. Store still requires dismount: dismount, F8 BccStablesHorseStore; confirm
+disappearance; BccStablesHorseCall to check saved values. Finish by storing and
+confirm disappearance. Do not repeat a successful feed if saved cores are full.
+
+
+## Inventory-driven feeding - 2026-10-27, ready for live test
+
+Supersedes the Feed-prompt approach and all prompt inspection/testing below.
+Maintainer chose item use to preserve lock-on prompt space and support distinct
+food effects. The custom Feed prompt, target-group tracking, inspection command,
+client food selection and idle/frame worker have been removed. Feeding starts
+only through Inventory's server-side RegisterUsableItem callback. Existing horse
+prompts are unchanged; the engine Feed entry is hidden, as in original Horses.
+Brushing/durability is the next care step and remains unimplemented in this runtime.
+
+Config.feeding.foods is the authority for each food's health/stamina benefit.
+Defaults remain 20/20 for all three established keys; server owners can vary each
+entry without editing Inventory definitions. Config.items.food remains legacy
+configuration and is not a second registry in this feeding implementation.
+Committed pending benefits retain the saved before/after amounts across changes.
+Existing receipt, slot, target and condition tables are unchanged (schema 11).
+
+The Inventory callback captures the current session and exact joined item id,
+definition id, name and row revision. It closes Inventory and enqueues one worker
+per character, then RETURNS so Inventory releases its active-use removal guard.
+After one scheduler tick, the worker revalidates the captured session and fresh
+GetItemForCharacter instance; it never searches for or substitutes another unit.
+The usual five-second acknowledgement/cancellation/receipt/recovery path follows.
+Inventory is allowed up to two seconds to release NUI focus before animation.
+No asynchronous presentation callback or SQL lock spans the Inventory callback.
+No Inventory transaction, active-use-token bypass or provider modification added.
+Registration conflicts fail startup rather than replace another resource's use.
+New feed admissions are not exposed through the client RPC; only exact existing
+operation acknowledgement/cancellation/recovery is accepted. Pending work still
+recovers while new feeding is disabled. New server results contain codes and are
+translated per recipient on the client, using settings/Core and English fallback;
+optional Feather Notify shows them on-screen, with F8 logging retained.
+
+204 offline tests pass (26 feeding tests), including exact-instance callback
+capture, guard-release deferral, immediate duplicate-use fencing, revision change
+refusal, session change/source reuse, custom food effects and immutable recovery,
+plus cancellation/lost replies/SQL rollback/native identity protections. These
+are SQL/provider/native simulations, not live CFX/MariaDB item-use acceptance.
+No commit, staging, migration or Inventory runtime/config change was performed.
+
+Required runtime sources -> destinations relative to server resources:
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua -> bcc-stables/client/horse/feeding.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\controller.lua -> bcc-stables/client/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\core\locale.lua -> bcc-stables/client/core/locale.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\feeding.lua -> bcc-stables/server/horse/feeding.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\core\boot.lua -> bcc-stables/server/core/boot.lua
+
+Configuration source C:\coding\bcc-feather-scripts\bcc-stables\config\settings.lua
+-> merge only the feeding block into bcc-stables/config/settings.lua, preserving
+server commerce and other settings; set enabled=true:
+
+```lua
+feeding = {
+    enabled = true,
+    foods = {
+        consumable_haycube = { health = 20, stamina = 20 },
+        consumable_carrots = { health = 20, stamina = 20 },
+        consumable_apple = { health = 20, stamina = 20 },
+    },
+},
+```
+
+Keep the previously enabled feather-inventory/config.lua
+Config.TrustedConsumptionCallers['bcc-stables']['stables.care.v1'] allowlist for
+these three foods. Do not overwrite that configuration or remove policy for
+unresolved receipts. It needs no edit/restart for this update. Existing Stables
+manifest already loads these feeding files and Inventory dependency: no refresh
+or SQL/full server restart required. Docs/tests stay local.
+
+Before copying/restarting with a horse out, player F8: BccStablesHorseStore;
+confirm disappearance. After copying/merging settings, server console in order:
+
+```text
+restart bcc-stables
+BccStablesStatus
+```
+
+Expect ready/care=true. Use an initialized horse with saved condition below 100
+(the original Morgan previously had 90/80). If all saved cores are full, report
+that rather than resetting data. Player F8 BccStablesHorseCall; dismount and stop
+leading/following beside the horse. Press I (Inventory's current default; use the
+configured inventory key if customized), right-click an apple and choose Use.
+Inventory should close and the feeding animation begin. First move away during
+five seconds: no food consumed, saved cores unchanged. Return and use the apple
+again, stay beside it: one exact apple consumed, saved effects applied once and
+notification shown. Player F8 BccStablesHorseStore; confirm disappearance; then
+BccStablesHorseCall and verify the saved condition line. Finish with
+BccStablesHorseStore and confirm disappearance. No Feed prompt or feed command is
+expected. Brush use is intentionally not part of this feeding acceptance test.
+
+
+## Feed target observation - 2026-10-27, runtime evidence needed
+
+Feed is still missing with no client errors. Live status confirms a matching
+active physical call, ownerSource/networkOwner=2, care=true. The group changes
+alone did not establish the cause. Client now uses GetPlayerTargetEntity's typed
+BOOL/entity output (also used in the original horse info card) and requires that
+entity to match this horse. Existing BccStablesHorseFeed gains a read-only inspect
+argument showing client configuration, local horse/bound state, worker timestamp,
+registered handle/group, visibility/enablement and last matching target sample.
+It does not consume food, call a server RPC or add a separate proof command. Last
+target/group samples persist when F8 takes focus; string sampling is bounded to
+500ms. Nineteen feeding tests pass, including inspection without invoking Feed.
+Native UI is not claimed fixed without runtime evidence.
+
+Only C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua needs
+copying to resource-relative bcc-stables/client/horse/feeding.lua. Docs/tests stay
+local. Player F8 BccStablesHorseStore and confirm disappearance before restart;
+after copying, server console restart bcc-stables; player F8 BccStablesHorseCall.
+Right-click the nearby dismounted horse for two seconds. If Feed is missing,
+player F8 BccStablesHorseFeed inspect and send its exact output. No refresh,
+configuration, SQL or Inventory changes.
+
+Native association remains in client/horse/controller.lua ready():
+0xD2CB0FB0FDCB473D(r.player,r.entity) when the saddle slot is empty; clear() only
+clears a slot it wrote when it still points at the exact same horse.
+
+
+## Original horse-prompt comparison - 2026-10-27, retest pending
+
+Feed remained missing after the first prompt-lifecycle correction. Compared the
+preserved original client/horse/prompts.lua, client/horse/spawn.lua and
+server/horse/interactions.lua. Original feeding hides the engine Feed prompt and
+starts Interaction_Food from a usable Inventory food item; its scripted horse
+prompts obtain the target group through InvokeNative(0xB796970BD125FCE8,horse)
+without ResultAsLong or a zero-group exclusion. The new Feed entry now uses that
+exact group call and accepts numeric zero. The original interaction animation and
+new receipt-backed consumption remain unchanged; this is not a claim that the
+original had a working scripted Feed button. Eighteen feeding tests pass, now
+asserting native argument count and zero-group binding. Live visibility remains
+unverified. Previous diagnosis of registration timing alone was insufficient.
+
+Required upload: C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua
+-> bcc-stables/client/horse/feeding.lua (relative to server resources). No refresh,
+config, Inventory or SQL changes. Docs/tests stay local. Player F8 if a horse is
+out: BccStablesHorseStore; confirm disappearance. After copying, server console:
+restart bcc-stables. Player F8: BccStablesHorseCall; wait for ready, stand beside
+it dismounted and right-click. If Feed is still absent, supply player F8 errors
+and server-console BccStablesStatus taken with this called horse present, rather
+than adding another diagnostic command or changing configuration.
+
+
+## Feed prompt lock-on correction - 2026-10-27, ready for retest
+
+Server care readiness passed live, but Feed was missing. Client registered its
+prompt before target lock-on and never rebound its target group. It now registers
+only in a nonzero live group, visibly before RegisterEnd as in the legacy horse
+prompts, and tracks group changes without rebuilding the prompt. The new coroutine
+regression covers no target, first lock-on, changed group and target release.
+196 offline tests pass; actual native prompt visibility remains pending.
+
+Copy C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua to
+bcc-stables/client/horse/feeding.lua (relative to server resources). Docs/tests
+stay local. No manifest/config/SQL/provider changes or refresh required. If a
+horse is out: player F8 BccStablesHorseStore; confirm disappearance. Server console:
+restart bcc-stables. Player F8: BccStablesHorseCall; dismount, stand beside the
+horse and right-click to lock on. Verify Feed/R appears. Do not consume food yet
+if only checking visibility; cancellation/success/restoration tests follow.
+
+
+## Feeding refactor - 2026-10-27, ready for live testing
+
+Checkout expiration and confirmation cancellation passed live: unchanged balance
+and roster. Insufficient funds was skipped because the balance is too high;
+offline coverage remains. No repeat paid purchase is needed for these checks.
+
+Feeding now uses one client and one server module, the preserved BCC food
+interaction and a scripted Feed (R) entry in the native horse lock-on group.
+The engine Feed entry is hidden only after its replacement is registered; other
+horse prompts are unchanged. The command BccStablesHorseFeed [foodName] uses the
+same normal path. No new proof commands, migration, provider code or generic
+transaction framework. Config.feeding.enabled defaults false; food keys remain
+consumable_haycube, consumable_carrots and consumable_apple.
+
+The server validates the current observed living horse, canonical Assets owner,
+distance, movement and current simulator occupancy. Existing schema-11 care
+operation/slot/target rows reserve a precise ordinary item instance and immutable
+before/after condition. No provider calls run inside the Stables SQL transaction.
+The animation must acknowledge initiation; the five seconds start at that
+acknowledgement. Distance/session/lifecycle interruption or missing/failed
+animation cancels the same Inventory receipt. Mounted/led horses refuse care.
+Store during feeding requests cancellation and can be retried after it finishes;
+follow/approach requests refuse while the interaction is active.
+
+Inventory ConsumeCharacterItemOnce owns removal. A matching terminal receipt
+commits the capped 20/20 saved benefit, effect row and released care slot in one
+local transaction. Unknown replies retain the exact operation. The client retains
+its animated operation for retry; a bounded five-operation recovery pass every
+10 seconds while work is pending cancels the SAME provider receipt, applying an already-consumed
+benefit once even after restart/offline departure. Recovery does not consume a
+second item and never adopts old archived care record formats. Disabling new
+feeding does not disable owed-benefit recovery. Keep Inventory's caller policy
+for unresolved receipts. Failed/mismatched evidence stays reserved for inspection.
+
+Normal completion sends absolute saved condition to the current network owner,
+guarded by generation/observer/model and monotonic revision. Native application
+is best effort, not claimed as confirmed: an unavailable/migrated simulator or
+recovered uncertain delivery restores saved values on the next call. This slice
+does not persist native riding decay, add XP or brush durability. Already-full
+saved condition refuses without consumption. Existing uninitialized horses are
+not silently reset; newly purchased horses already have condition 100/100.
+
+195 offline tests pass (17 new feeding cases), including SQL rollback, lost
+receipt reply, reload recovery/cancellation, same-operation retry, foreign receipt
+refusal, capped conditions, occupancy/session/distance guards and client stale
+projection fences. SQLite/provider/native simulations do not certify actual
+MariaDB concurrent lock scheduling, CFX prompts or feeding animation. Live test
+is pending. No commit/staging performed.
+
+Required runtime sources -> destinations relative to the server resource root:
+- C:\coding\bcc-feather-scripts\bcc-stables\fxmanifest.lua -> bcc-stables/fxmanifest.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\config\settings.lua -> bcc-stables/config/settings.lua (merge feeding only; preserve deployed commerce settings)
+- C:\coding\bcc-feather-scripts\bcc-stables\client\core\feather.lua -> bcc-stables/client/core/feather.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\core\locale.lua -> bcc-stables/client/core/locale.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\controller.lua -> bcc-stables/client/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\client\horse\feeding.lua -> bcc-stables/client/horse/feeding.lua (new)
+- C:\coding\bcc-feather-scripts\bcc-stables\server\core\boot.lua -> bcc-stables/server/core/boot.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\controller.lua -> bcc-stables/server/horse/controller.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\whistle.lua -> bcc-stables/server/horse/whistle.lua
+- C:\coding\bcc-feather-scripts\bcc-stables\server\horse\feeding.lua -> bcc-stables/server/horse/feeding.lua (new)
+
+Set Config.feeding.enabled=true in the deployed Stables settings. Merge into
+deployed feather-inventory/config.lua (do not replace other caller entries):
+
+```lua
+Config.TrustedConsumptionCallers['bcc-stables'] = {
+    ['stables.care.v1'] = {
+        consumable_haycube = true,
+        consumable_carrots = true,
+        consumable_apple = true,
+    },
+}
+```
+
+The existing Config.TrustedConsumptionCallers table must be initialized first.
+If this caller/purpose already exists, merge the food keys rather than removing
+other entries. No Inventory runtime files changed. Optional docs/tests remain
+local. No SQL or full server restart.
+
+Before uploading/restarting with a horse out, player F8: BccStablesHorseStore;
+confirm disappearance, then server console: stop bcc-stables. After copying and
+merging settings, server console in order:
+
+```text
+refresh
+restart feather-inventory
+ensure bcc-stables
+BccStablesStatus
+```
+
+Refresh is required for the manifest/new scripts/dependency. Inventory restart
+loads its caller policy and may stop dependents. Expected Stables state ready,
+care=true. At Valentine press L; select an already initialized horse whose saved
+condition is below 100 (the previous Morgan was 90/80); check Stats & Details.
+If all horses are fully fed, stop and report that instead of resetting data.
+Carry an apple and note the quantity. Close the menu, player F8 BccStablesHorseCall
+or whistle. Dismount, stop following/leading, stand beside it, right-click the
+horse and press Feed/R; move away during five seconds. Expected cancellation,
+unchanged item count and saved condition. Return and feed again, stay beside it;
+one allowed food is consumed and saved cores increase by 20 capped at 100.
+Automatic choice follows Config.items.food order; use player F8
+BccStablesHorseFeed consumable_apple to explicitly choose an apple if carrying
+several allowed foods. Player F8 BccStablesHorseStore; confirm disappearance;
+BccStablesHorseCall. The saved-condition line must show the same new values.
+Finish with BccStablesHorseStore and confirm disappearance. Native lock-on entry,
+animation, cancellation and saved-core reapplication are the live gate.
+
 ## End-of-session commit preparation - 2026-10-26
 
 Maintainer confirmed sex appearance and header-driven selected status now work.

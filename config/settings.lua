@@ -63,6 +63,26 @@ Config = {
         purchasesEnabled = false,
     },
 
+    tack = {
+        enabled = false, -- Install database/feather_tack.sql and trust Inventory unique grants first.
+    },
+
+    feeding = {
+        enabled = false, -- Requires Inventory's stables.care.v1 food allowlist.
+        -- Saved core points restored by using that food from Inventory.
+        foods = {
+            consumable_haycube = { health = 20, stamina = 20 },
+            consumable_carrots = { health = 20, stamina = 20 },
+            consumable_apple = { health = 20, stamina = 20 },
+        },
+    },
+
+    brushing = {
+        enabled = false,
+        health = 10,
+        stamina = 10,
+    },
+
     horseLimits = {
         player = 5,   -- Maximum horses owned by a normal player.
         trainer = 10, -- Maximum horses owned by a configured trainer.

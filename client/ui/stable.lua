@@ -3,7 +3,7 @@ local U, C, P = Stables.StableUI, Stables.Client, Stables.Preview
 local Menu = exports['feather-menu-v2']
 local state, opening = nil, false
 local entryPrompt
-local render, renderDetails, renderRename, renderCatalog, restoreRoster, showCatalogCoat, renderCheckout
+local render, renderDetails, renderRename, renderCatalog, restoreRoster, showCatalogCoat, renderCheckout, renderTack, openTack
 local function yes(v) return v == true or v == 1 end
 
 local function requireValue(result)
@@ -73,13 +73,17 @@ local function preview(s, row)
     if P.IsShowing(s.token, s.site, row.horseId, row.modelKey) then P.SetGender(row.gender);return end
     request(s, 'preview', { horseId = row.horseId }, function(value)
         if state ~= s then return end
-        P.Show(s.token, s.site, value.modelKey, current, value.horseId, value.gender)
+        P.Show(s.token, s.site, value.modelKey, current, value.horseId, value.gender, value.tack)
     end)
 end
 
 local function page(s, key)
+    if key ~= 'tack' and s.tack then
+        if s.tack.horse then P.RestoreTack(s.token, s.site, s.tack.horse.horseId) end
+        s.tack = nil
+    end
     local old = s.pageId
-    s.tab = (key == 'catalog' or key == 'checkout') and 'catalog' or 'roster'
+    s.tab = key == 'tack' and 'tack' or (key == 'catalog' or key == 'checkout') and 'catalog' or 'roster'
     s.pageSequence = (s.pageSequence or 0) + 1
     local id = requireValue(Menu:CreatePage(s.menuId, { key = key .. '-' .. s.pageSequence })).pageId
     local function add(kind, key, spec, callback)
@@ -89,13 +93,15 @@ local function page(s, key)
 end
 
 local function activate(s, id, old)
-    -- Two stable navigation targets plus one replaceable active page. Controlled
+    -- Three stable navigation targets plus one replaceable active page. Controlled
     -- tabs keep preview changes inside this menu session without opening a route.
     local rosterId = s.tab == 'roster' and id or s.tabAnchors.roster
     local catalogId = s.tab == 'catalog' and id or s.tabAnchors.catalog
+    local tackId = s.tab == 'tack' and id or s.tabAnchors.tack
     requireValue(Menu:ConfigureNavigation(s.menuId, { type = 'tabs', controlled = true, pages = {
         { pageId = rosterId, label = C.Text('menu_title') },
         { pageId = catalogId, label = C.Text('menu_browseCatalog') },
+        { pageId = tackId, label = C.Text('menu_tack') },
     } }, function(event)
         if state ~= s or s.busy then return end
         P.StopRotation()
@@ -105,6 +111,8 @@ local function activate(s, id, old)
             local saved = s.catalogSelection
             if saved and saved.breed and saved.model then showCatalogCoat(s, saved.breed, saved.model)
             else renderCatalog(s) end
+        elseif event.toPageId == tackId and s.tab ~= 'tack' then
+            openTack(s)
         end
     end))
     requireValue(Menu:NavigateToPage(s.menuId, id))
@@ -150,6 +158,211 @@ local function catalogPrice(coat)
     if currency == 2 then return amount(coat.goldPrice, 'menu_goldPrice') end
     if currency == 3 then return C.Text('menu_priceChoice', amount(coat.cashPrice, 'menu_cashPrice'), amount(coat.goldPrice, 'menu_goldPrice')) end
     return C.Text('menu_unknown')
+end
+
+local function tackLabel(item)
+    local policy=Tack.PieceSlots[item.slot]
+    local number = item.label:match(policy.pattern)
+    return number and C.Text('menu_'..policy.numberKey, tonumber(number)) or item.label
+end
+local function tackError(reply)
+    local keys = {insufficient_funds='purchaseFunds',quote_expired='purchaseExpired',price_conflict='purchaseExpired',
+        purchase_disabled='purchaseDisabled',purchase_restricted='purchaseRestricted',
+        collection_full='tackInventoryFull',tack_saddle_required='tackSaddleRequired',tack_dependents_equipped='tackDependents',tack_conflict='tackConflict',tack_item_unavailable='tackConflict',horse_busy='tackConflict',tack_inventory_full='tackInventoryFull'}
+    return C.Text('menu_' .. (keys[reply.code] or 'tackPending'))
+end
+local function previewTackPiece(s,form,piece,catalogId)
+    if form.slot=='saddle' then
+        local parts={}
+        for _,item in ipairs(form.shop.owned or {}) do
+            if piece and item.saddleId==piece.instanceId then parts[item.slot]={catalogId=item.catalogId} end
+        end
+        return P.SetAssembly(s.token,s.site,form.horse.horseId,catalogId,parts)
+    end
+    return P.SetTack(s.token,s.site,form.horse.horseId,form.slot,catalogId)
+end
+local function acceptTackShop(s, form, shop, preferred)
+    form.shop = shop;form.slot=form.slot or 'saddle'
+    form.instanceId = preferred or shop.loadout and shop.loadout[form.slot] or 0
+    form.piece = nil;form.catalogId = nil
+    local saved={}
+    for _, item in ipairs(shop.owned or {}) do
+        local slot=Tack.GetItem(item.catalogId).slot
+        if shop.loadout and item.instanceId == shop.loadout[slot] then saved[slot]={catalogId=item.catalogId} end
+        if slot==form.slot and item.instanceId == form.instanceId then form.piece = item;form.catalogId = item.catalogId end
+    end
+    P.SetSavedTack(s.token, s.site, form.horse.horseId, saved)
+    if form.quote then form.catalogId=form.quote.catalogId end
+    if form.piece or form.quote then previewTackPiece(s,form,form.piece,form.catalogId) end
+end
+renderTack = function(s, form)
+    if state ~= s then return end
+    if not P.CanPreviewTack() then C.Message(C.Text('menu_tackUnavailable')); return end
+    s.tack = form; s.detail = nil; s.renameForm = nil; s.catalog = nil; s.checkout = nil
+    local id, old, add = page(s, 'tack')
+    add('header', 'title', { value = C.Text('menu_tack'), slot = 'header' })
+    if not form.horse then
+        add('textdisplay', 'tack-empty', { value = C.Text('menu_tackSelectHorse') })
+        add('button', 'close', { label = C.Text('menu_close'), slot = 'footer' }, function() close(s) end)
+        activate(s, id, old); return
+    end
+    local shop = form.shop or {available=false,owned={},loadout={}}
+    add('subheader', 'horse', { value = name(form.horse), slot = 'header' })
+    form.slot=form.slot or 'saddle'
+    local slot=form.slot
+    local policy=Tack.PieceSlots[slot]
+    local categories={}
+    for _,category in ipairs(Tack.PieceOrder) do categories[#categories+1]={value=category,label=C.Text('menu_'..Tack.PieceSlots[category].labelKey)} end
+    add('arrows','tack-category',{label=C.Text('menu_tackCategory'),value=slot,options=categories,disabled=form.quote~=nil},function(event)
+        if s.busy or form.quote or s.tack~=form or not Tack.PieceSlots[event.value] then return end
+        form.slot=event.value;form.error=nil;acceptTackShop(s,form,shop);renderTack(s,form)
+    end)
+    if policy.requiresSaddle and not shop.loadout.saddle then
+        add('textdisplay','tack-parent-notice',{value=C.Text('menu_tackSaddleRequired')})
+    end
+    if shop.available then
+        if shop.storage=='stable' then add('textdisplay','tack-storage',{value=C.Text('menu_tackStorage')}) end
+        add('arrows', 'tack-view', {label=C.Text('menu_tackCollection'),value=form.mode or 'catalog',disabled=form.quote~=nil,
+            options={{value='owned',label=C.Text('menu_tackOwned_'..slot)},{value='catalog',label=C.Text('menu_tackBrowse_'..slot)}}},function(event)
+            if s.busy or form.quote or s.tack~=form then return end
+            if event.value~='owned' and event.value~='catalog' then return end
+            form.mode=event.value;acceptTackShop(s,form,shop);renderTack(s,form)
+        end)
+    end
+    if shop.available and form.mode=='owned' then
+        local options={{value='none',label=C.Text('menu_'..policy.emptyKey)}}
+        for _, owned in ipairs(shop.owned) do if Tack.GetItem(owned.catalogId).slot==slot then
+            local label=C.Text('menu_tackOwnedPiece',tackLabel(Tack.GetItem(owned.catalogId)),owned.instanceId)
+            options[#options+1]={value=tostring(owned.instanceId),label=label}
+        end end
+        add('arrows','tack-owned',{label=C.Text('menu_'..policy.labelKey),value=form.piece and tostring(form.piece.instanceId) or 'none',options=options},function(event)
+            if s.busy or s.tack~=form then return end
+            local chosen
+            for _, item in ipairs(shop.owned) do if tostring(item.instanceId)==event.value and Tack.GetItem(item.catalogId).slot==slot then chosen=item;break end end
+            if event.value~='none' and not chosen then return end
+            local applied=previewTackPiece(s,form,chosen,chosen and chosen.catalogId)
+            form.error=not applied and policy.requiresSaddle and 'tack_saddle_required' or nil
+            form.piece=chosen;form.instanceId=chosen and chosen.instanceId or 0;form.catalogId=chosen and chosen.catalogId
+            renderTack(s,form)
+        end)
+        if form.piece then
+            add('textdisplay','tack-condition',{value=C.Text('menu_tackCondition',form.piece.condition,shop.conditionMaximum or 100)})
+            if form.piece.saddleId then add('textdisplay','tack-assembly',{value=C.Text('menu_tackAttached',form.piece.saddleId)}) end
+            if form.piece.horseId then add('textdisplay','tack-equipped',{value=C.Text(form.piece.horseId==form.horse.horseId and 'menu_tackHere' or 'menu_tackElsewhere')}) end
+        end
+        if form.piece and form.piece.saddleId then
+            add('button','tack-detach',{label=C.Text('menu_tackDetach'),slot='footer'},function()
+                local selected=form.piece
+                request(s,'tack_equip',{horseId=form.horse.horseId,slot=slot,instanceId=selected.instanceId,
+                    expectedInstanceId=selected.instanceId,itemRevision=selected.revision,fromHorseId=selected.horseId,fromSaddleId=selected.saddleId,detach=true},function(value)
+                    form.error=nil;acceptTackShop(s,form,value,selected.instanceId);renderTack(s,form)
+                end,function(reply) form.error=reply.code;renderTack(s,form) end)
+            end)
+        end
+        if slot=='saddle' then add('textdisplay','tack-assembly-help',{value=C.Text('menu_tackAssemblyHelp')}) end
+        add('button','tack-equip',{label=C.Text((form.piece and 'menu_tackEquip_' or 'menu_tackUnequip_')..slot),slot='footer',
+            disabled=(form.piece and (form.piece.instanceId==(shop.loadout[slot] or 0) or policy.requiresSaddle and not shop.loadout.saddle)) or (not form.piece and not shop.loadout[slot]),
+            confirm=form.piece and form.piece.horseId and form.piece.horseId~=form.horse.horseId and
+                {title=C.Text('menu_tackEquip_'..slot),message=C.Text('menu_tackMoveSummary',name(form.horse)),confirmLabel=C.Text('menu_tackEquip_'..slot),cancelLabel=C.Text('menu_cancel')} or nil},function()
+            local selected=form.piece
+            request(s,'tack_equip',{horseId=form.horse.horseId,slot=slot,instanceId=selected and selected.instanceId or 0,
+                expectedInstanceId=shop.loadout[slot] or 0,itemRevision=selected and selected.revision or 0,
+                fromHorseId=selected and selected.horseId,fromSaddleId=selected and selected.saddleId},function(value)
+                form.error=nil;acceptTackShop(s,form,value);renderTack(s,form);C.Message(C.Text('menu_tackEquipped'))
+            end,function(reply) form.error=reply.code;renderTack(s,form) end)
+        end)
+    else
+        local options={{value='none',label=C.Text('menu_'..policy.emptyKey)}}
+        local position=1
+        for index,item in ipairs(Tack.CatalogBySlot[slot]) do
+            options[#options+1]={value=item.id,label=tackLabel(item)}
+            if form.catalogId==item.id then position=index+1 end
+        end
+        add('arrows','tack-saddle',{label=C.Text('menu_'..policy.labelKey),value=form.catalogId or 'none',options=options,disabled=form.quote~=nil},function(event)
+            if state~=s or s.busy or form.quote or s.tack~=form then return end
+            local item=Tack.GetItem(event.value)
+            if event.value~='none' and (not item or item.slot~=slot) then return end
+            local chosen=item and item.id or nil
+            if chosen==form.catalogId then return end
+            local applied=previewTackPiece(s,form,nil,chosen)
+            form.catalogId=chosen;form.error=not applied and policy.requiresSaddle and 'tack_saddle_required' or nil;renderTack(s,form)
+        end)
+        add('textdisplay','tack-position',{value=C.Text('menu_coatPosition',position,#options)})
+        local item=Tack.GetItem(form.catalogId)
+        if item then
+            add('textdisplay','tack-price',{value=C.Text('menu_catalogPrice')..': '..catalogPrice(item)})
+            if shop.available and shop.purchases then
+                local currencies={}
+                if item.currency~=2 then currencies[#currencies+1]={value='dollars',label=C.Text('menu_cash')} end
+                if item.currency~=1 then currencies[#currencies+1]={value='gold',label=C.Text('menu_gold')} end
+                if not form.quote and (not form.currency or item.currency==1 and form.currency~='dollars' or item.currency==2 and form.currency~='gold') then form.currency=currencies[1].value end
+                add('arrows','tack-currency',{label=C.Text('menu_currency'),value=form.currency,options=currencies,disabled=form.quote~=nil},function(event)
+                    if not s.busy and not form.quote then form.currency=event.value;renderTack(s,form) end
+                end)
+                local q=form.quote
+                local amount=q and q.amount/100 or form.currency=='dollars' and item.cashPrice or item.goldPrice
+                local shown=C.Text(form.currency=='dollars' and 'menu_cashPrice' or 'menu_goldPrice',item.currency==4 and 0 or amount)
+                add('button','tack-purchase',{label=C.Text(q and 'menu_tackConfirm_'..slot or 'menu_reviewPurchase'),slot='footer',
+                    confirm=q and {title=C.Text('menu_tackConfirm_'..slot),message=C.Text('menu_tackBuySummary',tackLabel(item),shown),
+                        confirmLabel=C.Text('menu_tackBuy_'..slot),cancelLabel=C.Text('menu_cancel')} or nil},function()
+                    local function failed(reply) form.error=reply.code;renderTack(s,form) end
+                    if not q then
+                        request(s,'tack_quote',{catalogId=item.id,currency=form.currency},function(value)
+                            form.quote=value;form.error=nil;renderTack(s,form)
+                        end,failed)
+                    else
+                        request(s,'tack_confirm',{operationId=q.operationId,amount=q.amount,currency=q.currency},function(value)
+                            if value.state~='fulfilled' then failed({code=value.state=='cancelled' and 'insufficient_funds' or 'tack_pending'});return end
+                            request(s,'tack_shop',{horseId=form.horse.horseId},function(updated)
+                                form.quote=nil;form.error=nil;form.mode='owned';acceptTackShop(s,form,updated,value.instanceId)
+                                renderTack(s,form);C.Message(C.Text('menu_tackPurchased'))
+                            end,failed)
+                        end,failed)
+                    end
+                end)
+            end
+        end
+        if not shop.available then add('textdisplay','tack-notice',{value=C.Text('menu_tackPreviewOnly')}) end
+    end
+    if form.error then add('textdisplay','tack-error',{value=tackError({code=form.error})}) end
+    rotation(add)
+    if shop.available then add('button','tack-refresh',{label=C.Text('menu_refresh'),slot='footer'},function()
+        request(s,'tack_shop',{horseId=form.horse.horseId},function(value)
+            if form.error=='quote_expired' or form.error=='price_conflict' or form.error=='insufficient_funds' then form.quote=nil end
+            form.error=nil;acceptTackShop(s,form,value);renderTack(s,form)
+        end)
+    end) end
+    add('button','tack-back',{label=C.Text('menu_back'),slot='footer',row='actions'},function()
+        if not s.busy then P.StopRotation();restoreRoster(s) end
+    end)
+    add('button','close',{label=C.Text('menu_close'),slot='footer',row='actions'},function() close(s) end)
+    activate(s,id,old)
+end
+
+openTack = function(s)
+    if not P.CanPreviewTack() then C.Message(C.Text('menu_tackUnavailable')); return end
+    local horse = s.selectedHorse
+    if not horse then P.Clear(true); renderTack(s, {}); return end
+    request(s, 'preview', { horseId = horse.horseId }, function(value)
+        if not value.selected or value.availability ~= 'stored' then
+            s.selectedHorse = nil; P.Clear(true); renderTack(s, {}); return
+        end
+        s.busy = true
+        local ok = true
+        if P.IsShowing(s.token, s.site, value.horseId, value.modelKey) then P.SetGender(value.gender);P.SetSavedTack(s.token,s.site,value.horseId,value.tack or {})
+        else ok = pcall(P.Show, s.token, s.site, value.modelKey, current, value.horseId, value.gender, value.tack) end
+        s.busy = false
+        if state ~= s then return end
+        if s.closeRequested then close(s); return end
+        if not ok or not P.IsShowing(s.token, s.site, value.horseId, value.modelKey) then
+            P.Clear(true); C.Message(C.Text('menu_previewUnavailable')); return
+        end
+        P.StopRotation()
+        request(s,'tack_shop',{horseId=value.horseId},function(shop)
+            local form={horse=value,mode=shop.available and #shop.owned>0 and 'owned' or 'catalog'}
+            acceptTackShop(s,form,shop);renderTack(s,form)
+        end)
+    end)
 end
 
 showCatalogCoat = function(s, breed, model)
@@ -405,6 +618,7 @@ end
 render = function(s, data)
     if state ~= s then return end
     s.data = data; s.detail = nil; s.renameForm = nil; s.catalog = nil; s.checkout = nil
+    for _, horse in ipairs(data.entries) do if horse.selected then s.selectedHorse = horse; break end end
     local id, old, add = page(s, 'roster')
     add('header', 'title', { value = C.Text('menu_title'), slot = 'header' })
     add('subheader', 'site', { value = StableLocations[s.site].shop.name, slot = 'header' })
@@ -491,6 +705,7 @@ function U.Open(site)
             s.tabAnchors = {
                 roster = requireValue(Menu:CreatePage(s.menuId, { key = 'roster-tab' })).pageId,
                 catalog = requireValue(Menu:CreatePage(s.menuId, { key = 'catalog-tab' })).pageId,
+                tack = requireValue(Menu:CreatePage(s.menuId, { key = 'tack-tab' })).pageId,
             }
             requireValue(Menu:RegisterMenuLifecycle(s.menuId, function(event)
                 if event.event == 'closed' and state == s then close(s) end
@@ -518,7 +733,9 @@ AddEventHandler('feather-core:locale:changed', function()
     local s = state
     if s and s.data then
         local ok = pcall(function()
-            if s.checkout then
+            if s.tack then
+                renderTack(s, s.tack)
+            elseif s.checkout then
                 renderCheckout(s,s.checkout)
             elseif s.catalog then
                 renderCatalog(s, s.catalog.breed, s.catalog.model)

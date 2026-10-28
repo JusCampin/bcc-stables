@@ -10,6 +10,12 @@ shared_scripts {
     'config/settings.lua',
     'config/horse_catalog.lua',
     'config/stable_locations.lua',
+    'config/tack/catalog.lua',
+    'config/tack/categories/saddles.lua',
+    'config/tack/categories/saddlecloths.lua',
+    'config/tack/categories/stirrups.lua',
+    'config/tack/categories/saddle_horns.lua',
+    'shared/tack.lua',
     'shared/locale.lua',
     'locales/en.lua',
     'locales/fr.lua',
@@ -26,6 +32,8 @@ client_scripts {
     'client/core/dataview.lua',
     'client/horse/controller.lua',
     'client/horse/whistle.lua',
+    'client/horse/feeding.lua',
+    'client/tack/controller.lua',
     'client/ui/preview.lua',
     'client/ui/stable.lua'
 }
@@ -38,6 +46,8 @@ server_scripts {
     'server/horse/controller.lua',
     'server/horse/whistle.lua',
     'server/horse/checkout.lua',
+    'server/horse/feeding.lua',
+    'server/tack/feather.lua',
     'server/ui/stable.lua',
     'server/core/boot.lua'
 }
@@ -49,6 +59,7 @@ dependencies {
     'feather-mysql',
     'feather-assets',
     'feather-economy',
+    'feather-inventory',
     'feather-toolkit',
     'feather-routing',
     'feather-menu-v2',

@@ -47,7 +47,10 @@ end
 TriggerClientEvent=function(name,source,p)
     if name=='bcc-stables:call:create' then sent=p; createCount=(createCount or 0)+1 end
     if name=='bcc-stables:call:store_check' and autoOccupancy then
-        Stables.HorseController.OccupancyResult(source,{generationId=p.generationId,sequence=p.sequence,occupied=occupied==true})
+        local reply={generationId=p.generationId,sequence=p.sequence,occupied=occupied==true}
+        if p.care and not omitCareLife then reply.ownerAlive=not careOwnerDead;reply.horseAlive=not careHorseDead end
+        if p.condition then reply.healthCore=70;reply.staminaCore=60;reply.appliedRevision=0 end
+        Stables.HorseController.OccupancyResult(source,reply)
     end
 end
 function SpawnCandidate(observed)
@@ -125,6 +128,35 @@ class HorseControllerTest(unittest.TestCase):
         self.assertEqual(self.case.scalar('SELECT COUNT(*) FROM fs_call_slots'), 0)
         self.assertEqual(self.lua.globals().createCount, 1)
         self.assertEqual(self.lua.globals().deleteCount, 1)
+
+    def test_care_observation_uses_current_simulator_and_requires_life_facts(self):
+        self.call_and_bind();self.lua.execute('autoOccupancy=true;entities[100].owner=4')
+        session=self.lua.globals().session
+        record=self.controller.MovementRecord(session)
+        self.assertTrue(self.controller.CheckCareOccupancy(session,record))
+        self.lua.execute('omitCareLife=true')
+        self.assertEqual(self.controller.CheckCareOccupancy(session,record),(False,'care_observation_unknown'))
+        self.assertIsNone(record['storeCheck'])
+
+    def test_care_observation_distinguishes_dead_and_occupied(self):
+        self.call_and_bind();self.lua.execute('autoOccupancy=true;careHorseDead=true')
+        session=self.lua.globals().session;record=self.controller.MovementRecord(session)
+        self.assertEqual(self.controller.CheckCareOccupancy(session,record),(False,'care_life'))
+        self.lua.execute('careHorseDead=false;occupied=true')
+        self.assertEqual(self.controller.CheckCareOccupancy(session,record),(False,'care_occupied'))
+
+    def test_failed_condition_checkpoint_retains_active_horse(self):
+        self.call_and_bind()
+        self.lua.execute('''
+            autoOccupancy=true
+            Stables.Feeding={Capture=function(session,r,cores,authorize)
+                assert(cores.staminaCore==60 and authorize())
+                return {ok=false,code='care_pending',message='Save failed'}
+            end}
+        ''')
+        self.assertEqual(self.controller.Store(3)['code'],'care_pending')
+        self.assertEqual(self.lua.globals().deleteCount,0)
+        self.assertEqual(self.case.scalar('SELECT state FROM fs_call_leases'),'active')
 
     def test_existing_entity_with_copied_markers_cannot_bind(self):
         self.controller.Call(3)
@@ -269,6 +301,8 @@ class HorseControllerTest(unittest.TestCase):
         self.assertTrue(self.controller.Install()['ok'])
         self.lua.execute('''
             assert(handlers.entityCreated and handlers.onResourceStop and handlers.playerDropped)
+            handlers.onResourceStop('feather-inventory')
+            assert(not Stables.HorseController.Status().running)
             assert(exported.PrepareShutdown)
             local request=routes['stables.horses.call.request.v1'].options
             assert(request.requireCharacter and request.validatePayload({}) and not request.validatePayload({characterId='spoof'}))

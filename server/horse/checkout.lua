@@ -208,6 +208,7 @@ function P.Confirm(session,site,p,authorize)
     return P.Resume(q.id,q.characterId)
 end
 function P.Tick()
+    if Stables.Tack then Stables.Tack.Tick() end
     -- Only confirmed new checkout intents; never submit unpaid quotes or adopt
     -- legacy/proof orders. Committed intent may complete while its buyer is offline.
     local rows=DB.query([[SELECT operation_id,character_id FROM fs_operations

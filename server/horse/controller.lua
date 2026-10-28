@@ -41,6 +41,7 @@ local function saveStopProofs()
 end
 local function cancel(r)
     r.cancelled = true
+    if r.care then r.care.cancelled=true end
     if C.CancelMovement then C.CancelMovement(r) end
     TriggerClientEvent('bcc-stables:call:cancel', r.session.source, r.id)
 end
@@ -67,6 +68,30 @@ function C.IsDistant(session)
 end
 
 function C.HasPhysicalCall(session) return records[session.characterId]~=nil end
+
+-- Ask the current simulator through the existing occupancy protocol. No second
+-- horse locator and no assumption that the character owns network control.
+function C.CheckCareOccupancy(session,r,allowMounted)
+    if C.MovementRecord(session)~=r or r.storeCheck then return false,'care_observation_unknown' end
+    local owner=NetworkGetEntityOwner(r.entity)
+    local ped=GetPlayerPed(session.source)
+    if type(owner)~='number' or owner<1 or GetPlayerRoutingBucket(owner)~=0 or not exists(ped) then return false,'care_observation_unknown' end
+    local targetNet=NetworkGetNetworkIdFromEntity(ped)
+    if type(targetNet)~='number' or targetNet<1 then return false,'care_observation_unknown' end
+    r.storeSequence=(r.storeSequence or 0)+1
+    local t={owner=owner,sequence=r.storeSequence,expires=GetGameTimer()+1500,care=true,condition=true}
+    r.storeCheck=t
+    TriggerClientEvent('bcc-stables:call:store_check',owner,{generationId=r.id,observerId=r.observerId,
+        netId=r.netId,modelKey=r.horse.modelKey,sequence=t.sequence,care=true,targetNet=targetNet,condition=true,
+        allowMounted=allowMounted~=false})
+    while t.reply==nil and GetGameTimer()<t.expires and not r.cancelled do Wait(25) end
+    if r.storeCheck==t then r.storeCheck=nil end
+    if t.reply==nil or C.MovementRecord(session)~=r or NetworkGetEntityOwner(r.entity)~=owner
+        or GetPlayerPed(session.source)~=ped or NetworkGetNetworkIdFromEntity(ped)~=targetNet then return false,'care_observation_unknown' end
+    if t.ownerAlive~=true or t.horseAlive~=true then return false,'care_life' end
+    if t.reply then return false,'care_occupied' end
+    return true,nil,t.cores
+end
 
 -- Console status only: observe live records without SQL, control requests or
 -- ownership changes. A reused entity must not be reported as our simulator.
@@ -292,11 +317,14 @@ function C.Bind(source, p)
             or owned.value.modelKey~=r.horse.modelKey or owned.value.selectionRevision~=r.horse.selectionRevision
             or not running or draining or r.cancelled or GetConvar(PROCESS,'')~=epoch
             or not position(source) or not same(r) then return F.Error('stale_call','Horse authority changed during binding.') end
+        local tack=Stables.Tack and Stables.Tack.Loadout(session,r.horse.horseId) or F.Ok({})
+        if not tack.ok then return tack end
         local bound=R.Bind(session,r.id,observation(r)); if not bound.ok then return bound end
         if not running or draining or r.cancelled or not F.IsCurrent(session) or not same(r)
             or not position(source) or GetConvar(PROCESS,'')~=epoch then return F.Error('stale_call','Bound horse requires cleanup.') end
         r.phase='active'
-        return F.Ok({generationId=r.id,horseId=r.horse.horseId,state='active',netId=r.netId,condition=owned.value.condition})
+        r.requiredConditionRevision=owned.value.condition and owned.value.condition.revision or 0
+        return F.Ok({generationId=r.id,horseId=r.horse.horseId,state='active',netId=r.netId,condition=owned.value.condition,tack=tack.value})
     end)
     r.busy=false
     if not called then result=F.Error('call_outcome_unknown','Binding interrupted; the call remains reserved.') end
@@ -311,7 +339,21 @@ function C.OccupancyResult(source,p)
         local ticket=r.storeCheck
         if r.id==p.generationId and ticket and ticket.owner==source and ticket.sequence==p.sequence
             and GetGameTimer()<=ticket.expires and ticket.reply==nil and same(r)
-            and NetworkGetEntityOwner(r.entity)==source then ticket.reply=p.occupied; return F.Ok(true) end
+            and NetworkGetEntityOwner(r.entity)==source then
+            if ticket.care and (type(p.ownerAlive)~='boolean' or type(p.horseAlive)~='boolean') then
+                return F.Error('invalid_input','Care life observation required.')
+            end
+            if ticket.condition then
+                if not F.IsRevision(p.healthCore) or p.healthCore>100 or not F.IsRevision(p.staminaCore)
+                    or p.staminaCore>100 or not F.IsRevision(p.appliedRevision) then
+                    return F.Error('invalid_input','Current core observation required.')
+                end
+                ticket.cores={healthCore=p.healthCore,staminaCore=p.staminaCore,appliedRevision=p.appliedRevision,
+                    owner=source,observedAt=GetGameTimer()}
+            end
+            ticket.reply,ticket.ownerAlive,ticket.horseAlive=p.occupied,p.ownerAlive,p.horseAlive
+            return F.Ok(true)
+        end
     end
     return F.Error('stale_call','Occupancy ticket expired or its simulator changed.')
 end
@@ -321,6 +363,7 @@ function C.Store(source,relocationGeneration)
     local session=captured.value
     local r=records[session.characterId]
     if not r then return F.Error('call_not_observed','No live horse observer; saved identities will not be deleted.') end
+    if r.care then r.care.cancelled=true; return F.Error('horse_care_busy','Feeding is cancelling; retry after it finishes.') end
     if r.busy or r.session.sessionId~=session.sessionId then return F.Error('busy','A horse operation is finishing.') end
     if r.cancelled then return cleanup(r) end
     if r.phase~='active' or not same(r) then return F.Error('horse_not_ready','Wait for your horse before storing it.') end
@@ -329,15 +372,22 @@ function C.Store(source,relocationGeneration)
         local owner=NetworkGetEntityOwner(r.entity)
         if type(owner)~='number' or owner<1 or GetPlayerRoutingBucket(owner)~=0 then return F.Error('occupancy_unknown','Horse simulator is unavailable.') end
         r.storeSequence=(r.storeSequence or 0)+1
-        local ticket={owner=owner,sequence=r.storeSequence,expires=GetGameTimer()+1500}
+        local ticket={owner=owner,sequence=r.storeSequence,expires=GetGameTimer()+1500,condition=Stables.Feeding~=nil}
         r.storeCheck=ticket
         TriggerClientEvent('bcc-stables:call:store_check',owner,{generationId=r.id,observerId=r.observerId,
-            netId=r.netId,modelKey=r.horse.modelKey,sequence=ticket.sequence})
+            netId=r.netId,modelKey=r.horse.modelKey,sequence=ticket.sequence,condition=ticket.condition})
         while ticket.reply==nil and GetGameTimer()<ticket.expires and not r.cancelled do Wait(25) end
         if not F.IsCurrent(session) or r.cancelled or not same(r) or NetworkGetEntityOwner(r.entity)~=owner
             or GetEntityRoutingBucket(r.entity)~=0 or not position(source) then return F.Error('occupancy_unknown','Horse or session changed during the store check.') end
         if ticket.reply==true then return F.Error('horse_occupied','Dismount before storing this horse.') end
         if ticket.reply~=false then return F.Error('occupancy_unknown','Horse occupancy could not be verified.') end
+        if Stables.Feeding then
+            local saved=Stables.Feeding.Capture(session,r,ticket.cores,function()
+                return F.IsCurrent(session) and not r.cancelled and same(r) and NetworkGetEntityOwner(r.entity)==owner
+                    and records[session.characterId]==r and r.phase=='active' and GetPlayerRoutingBucket(source)==0
+            end)
+            if not saved.ok then return saved end
+        end
         return F.Ok(true)
     end)
     r.storeCheck,r.busy=nil,false
@@ -506,18 +556,23 @@ function C.Install()
         local action,handler,empty=entry[1],entry[2],entry[3]
         local result=F.Call('feather-core','RegisterRpc','stables.horses.call.'..action..'.v1',handler,{
             contract=1,direction='client_to_server',requireCharacter=action~='store_check_result',
-            windowMs=2000,maxCalls=2,maxPayloadBytes=empty and 16 or 192,maxDepth=2,maxNodes=6,
+            windowMs=2000,maxCalls=2,maxPayloadBytes=empty and 16 or 384,maxDepth=2,maxNodes=10,
             validatePayload=function(p)
                 if type(p)~='table' then return false end
                 if empty then return next(p)==nil end
                 if not F.IsUuid(p.generationId) then return false end
                 for key in pairs(p) do
                     if key~='generationId' and (action=='bind' and key~='netId' or action=='accept' and key~='observerId'
-                        or action=='store_check_result' and key~='sequence' and key~='occupied') then return false end
+                        or action=='store_check_result' and key~='sequence' and key~='occupied' and key~='ownerAlive' and key~='horseAlive'
+                            and key~='healthCore' and key~='staminaCore' and key~='appliedRevision') then return false end
                 end
                 if action=='bind' then return type(p.netId)=='number' and p.netId%1==0 and p.netId>0 and p.netId<=2147483647 end
                 if action=='accept' then return F.IsUuid(p.observerId) end
                 return type(p.sequence)=='number' and p.sequence%1==0 and p.sequence>0 and type(p.occupied)=='boolean'
+                    and (p.ownerAlive==nil or type(p.ownerAlive)=='boolean') and (p.horseAlive==nil or type(p.horseAlive)=='boolean')
+                    and (p.healthCore==nil or (F.IsRevision(p.healthCore) and p.healthCore<=100))
+                    and (p.staminaCore==nil or (F.IsRevision(p.staminaCore) and p.staminaCore<=100))
+                    and (p.appliedRevision==nil or F.IsRevision(p.appliedRevision))
             end
         })
         if not result.ok then return result end
@@ -531,7 +586,7 @@ function C.Install()
     end)
     AddEventHandler('onResourceStop',function(resource)
         if resource==GetCurrentResourceName() or resource=='feather-core'
-            or resource=='feather-mysql' or resource=='feather-assets' then C.Stop() end
+            or resource=='feather-mysql' or resource=='feather-assets' or resource=='feather-inventory' then C.Stop() end
     end)
     AddEventHandler('txAdmin:events:serverShuttingDown',function() draining=true; for _,r in pairs(records) do cancel(r) end end)
     exports('PrepareShutdown',C.Drain)

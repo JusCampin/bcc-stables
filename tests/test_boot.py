@@ -77,6 +77,19 @@ class BootTest(unittest.TestCase):
                     self.assertTrue((ROOT/path).is_file())
                     lua.compile((ROOT/path).read_text(encoding='utf-8-sig'),name=path)
 
+    def test_manifest_initializes_tack_helpers_before_ui(self):
+        manifest=(ROOT/'fxmanifest.lua').read_text(encoding='utf-8-sig')
+        lua=LuaRuntime()
+        lua.execute('Stables={};Citizen={InvokeNative=function() end}')
+        for section in ('shared_scripts','client_scripts'):
+            body=re.search(section+r'\s*\{([^}]+)\}',manifest,re.S).group(1)
+            for path in re.findall(r"'([^']+)'",body):
+                if path.startswith('config/tack/') or path in ('shared/tack.lua','client/tack/controller.lua'):
+                    lua.execute((ROOT/path).read_text(encoding='utf-8-sig'))
+                if path=='client/ui/preview.lua':
+                    lua.execute("assert(Tack and #Tack.CatalogBySlot.saddle==179);assert(HorseAppearance and HorseAppearance.applyLoadout)")
+                    lua.execute("assert(#Tack.CatalogBySlot.saddlecloth==66 and #Tack.CatalogBySlot.stirrups==54 and #Tack.CatalogBySlot.saddle_horn==67)")
+
 
 if __name__=='__main__':
     unittest.main()

@@ -39,7 +39,7 @@ function W.Request(source,p)
     if type(p)~='table' or (p.mode~='approach' and p.mode~='toggle_follow') then return F.Error('invalid_input','Whistle mode required.') end
     local session=F.RequireSession(source); if not session.ok then return session end
     local r=C.MovementRecord(session.value)
-    if not r or r.whistleBusy then return F.Error('horse_not_ready','A current owned horse is required.') end
+    if not r or r.whistleBusy or r.care then return F.Error('horse_not_ready','A current idle owned horse is required.') end
     local mode=p.mode=='toggle_follow' and (r.movement and r.movement.mode=='follow' and 'stop' or 'follow') or 'approach'
     if mode~='stop' and GetGameTimer()-(r.lastWhistle or -2000)<1500 then return F.Error('rate_limited','Wait before whistling again.') end
     r.whistleBusy=true

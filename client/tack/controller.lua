@@ -9,6 +9,14 @@ function HorseAppearance.removeSlot(entity, slotId, deferUpdate)
     local slot = Tack.GetSlot(slotId)
     if not slot or not DoesEntityExist(entity) then return false end
     Citizen.InvokeNative(0xD710A5007C2AC539, entity, slot.category, 0)
+    -- Saddle presets can add these categories without separate loadout entries.
+    -- Remove them when swapping/removing a saddle; applyLoadout reapplies any
+    -- explicitly chosen horn/stirrups afterward in the normal slot order.
+    if slotId == 'saddle' then
+        for _, dependent in ipairs({'saddle_horn', 'stirrups'}) do
+            Citizen.InvokeNative(0xD710A5007C2AC539, entity, Tack.GetSlot(dependent).category, 0)
+        end
+    end
     if not deferUpdate then updateVariation(entity) end
     return true
 end
@@ -34,8 +42,15 @@ function HorseAppearance.applyLoadout(entity, loadout)
     end
 
     local applied = {}
+    local saddle = type(loadout) == 'table' and loadout.saddle
+    local saddleItem = saddle and Tack.GetItem(saddle.catalogId)
     for _, slot in ipairs(Tack.Slots) do
         local equipped = type(loadout) == 'table' and loadout[slot.id]
+        local policy = Tack.PieceSlots and Tack.PieceSlots[slot.id]
+        if policy and policy.requiresSaddle and not loadout.saddle then equipped = nil end
+        if not equipped and saddleItem and Tack.SaddleDefaults and Tack.SaddleDefaults[slot.id] then
+            equipped = {catalogId=Tack.SaddleDefaults[slot.id]}
+        end
         if equipped and equipped.catalogId then
             local item = Tack.GetItem(equipped.catalogId)
             if item then

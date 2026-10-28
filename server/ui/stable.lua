@@ -122,9 +122,19 @@ function M.Request(source,p,action)
         end
         if action=='purchase_quote' then return Stables.Checkout.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='purchase_confirm' then return Stables.Checkout.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
+        if action=='tack_quote' then return Stables.Tack.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
+        if action=='tack_confirm' then return Stables.Tack.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
+        if action=='tack_equip' then return Stables.Tack.Equip(s.session,p,function() return current(source,p)==s end) end
+        if action=='tack_shop' then return Stables.Tack.Shop(s.session,p.horseId) end
         local owned=R.ReadOwned(s.session,p.horseId); if not owned.ok then return owned end
         if not current(source,p) then return F.Error('session_stale','Stable session changed.') end
-        if action=='preview' then return owned end
+        if action=='preview' then
+            if Stables.Tack then
+                local equipped=Stables.Tack.Loadout(s.session,p.horseId)
+                owned.value.tack=equipped.ok and equipped.value or {}
+            end
+            return owned
+        end
         if not F.IsRevision(p.revision) or p.revision~=owned.value.selectionRevision then return F.Error('selection_conflict','Refresh the roster.') end
         local committed=DB.transaction(function(tx)
             local stable=tx.one('SELECT selected_horse_id,revision FROM fs_character_stables WHERE character_id=? FOR UPDATE',s.session.characterId)
@@ -151,7 +161,8 @@ function M.Tick()
     end
 end
 function M.Install()
-    for _,action in ipairs({'open','roster','preview','select','close','ping','rename','purchase_quote','purchase_confirm'}) do
+    for _,action in ipairs({'open','roster','preview','select','close','ping','rename','purchase_quote','purchase_confirm',
+        'tack_shop','tack_quote','tack_confirm','tack_equip'}) do
         local result=F.Call('feather-core','RegisterRpc','stables.horses.call.menu_'..action..'.v1',function(p,source)
             return action=='open' and M.Open(source,p) or M.Request(source,p,action)
         end,{contract=1,direction='client_to_server',requireCharacter=true,windowMs=2000,maxCalls=4,
@@ -161,7 +172,16 @@ function M.Install()
                 if action=='rename' then allowed.name=true end
                 if action=='purchase_quote' then allowed.modelKey=true;allowed.name=true;allowed.gender=true;allowed.currency=true end
                 if action=='purchase_confirm' then allowed.operationId=true;allowed.amount=true;allowed.currency=true end
+                if action=='tack_quote' then allowed.catalogId=true;allowed.currency=true end
+                if action=='tack_confirm' then allowed.operationId=true;allowed.amount=true;allowed.currency=true end
+                if action=='tack_equip' then allowed.instanceId=true;allowed.expectedInstanceId=true;allowed.itemRevision=true;allowed.fromHorseId=true;allowed.slot=true;allowed.detach=true;allowed.fromSaddleId=true end
                 for key in pairs(p) do if not allowed[key] then return false end end
+                if action=='tack_shop' then return F.IsUuid(p.token) and F.IsUuid(p.horseId) end
+                if action=='tack_quote' then return F.IsUuid(p.token) and type(p.catalogId)=='string' and #p.catalogId<=64 and (p.currency=='dollars' or p.currency=='gold') end
+                if action=='tack_confirm' then return F.IsUuid(p.token) and F.IsUuid(p.operationId) and F.IsRevision(p.amount) and (p.currency=='dollars' or p.currency=='gold') end
+                if action=='tack_equip' then return (p.detach==nil or type(p.detach)=='boolean') and (p.fromSaddleId==nil or F.IsRevision(p.fromSaddleId) and p.fromSaddleId>0) and F.IsUuid(p.token) and F.IsUuid(p.horseId) and F.IsRevision(p.instanceId)
+                    and (p.slot==nil or type(p.slot)=='string' and Tack.PieceSlots[p.slot]~=nil)
+                    and F.IsRevision(p.expectedInstanceId) and F.IsRevision(p.itemRevision) and (p.fromHorseId==nil or F.IsUuid(p.fromHorseId)) end
                 if action=='purchase_quote' then return F.IsUuid(p.token) and type(p.modelKey)=='string' and #p.modelKey<=64
                     and type(p.name)=='string' and #p.name<=400 and (p.gender=='male' or p.gender=='female') and (p.currency=='dollars' or p.currency=='gold') end
                 if action=='purchase_confirm' then return F.IsUuid(p.token) and F.IsUuid(p.operationId) and F.IsRevision(p.amount) and type(p.currency)=='string' and #p.currency<=32 end
@@ -171,7 +191,7 @@ function M.Install()
         if not result.ok then return result end
     end
     AddEventHandler('onResourceStop',function(resource)
-        if resource==GetCurrentResourceName() or resource=='feather-core' or resource=='feather-routing' then
+        if resource==GetCurrentResourceName() or resource=='feather-core' or resource=='feather-routing' or resource=='feather-inventory' then
             for _,s in pairs(sessions) do close(s) end
         end
     end)

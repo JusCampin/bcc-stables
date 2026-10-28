@@ -38,9 +38,11 @@ class PreviewTest(unittest.TestCase):
             end
             DoesEntityExist=function() return true end
             DeleteEntity=function() deleted=deleted+1 end
-            cleaned={};dirty={};sexValues={}
+            cleaned={};dirty={};sexValues={};components={};removals={}
             GetEntityModel=function() return 123 end
             Citizen={InvokeNative=function(hash,entity,expression,value)
+                if hash==0xD3A7B003ED343FD9 then components[#components+1]={entity=entity,hash=expression} end
+                if hash==0xD710A5007C2AC539 then removals[#removals+1]={entity=entity,category=expression} end
                 if hash==0x5653AB26C82938CF then sexValues[#sexValues+1]=value end
                 if hash==0x6585D955A68452A5 then cleaned[entity]=(cleaned[entity] or 0)+1;dirty[entity]=false end
             end}
@@ -58,10 +60,133 @@ class PreviewTest(unittest.TestCase):
             DisplayRadar=function(value) radar=value end
             IsCurrent=function() return valid end
         ''')
-        self.lua.execute((ROOT/'client/ui/preview.lua').read_text())
+        for path in ('config/tack/catalog.lua', 'config/tack/categories/saddles.lua','config/tack/categories/saddlecloths.lua','config/tack/categories/stirrups.lua','config/tack/categories/saddle_horns.lua',
+                     'shared/tack.lua', 'client/tack/controller.lua', 'client/ui/preview.lua'):
+            self.lua.execute((ROOT/path).read_text())
 
     def show(self):
         self.lua.execute("Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent);Frame(200)")
+
+    def test_saddle_selection_reuses_preview_and_rejects_stale_identity(self):
+        self.lua.execute("""
+            Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a')
+            saddle=Tack.CatalogBySlot.saddle[1].id
+            assert(Stables.Preview.SetSaddle('token','valentine','horse-a',saddle))
+            assert(Stables.Preview.SetSaddle('token','valentine','horse-a',saddle))
+            assert(not Stables.Preview.SetSaddle('old','valentine','horse-a',saddle))
+            assert(not Stables.Preview.SetSaddle('token','valentine','other',saddle))
+            assert(not Stables.Preview.SetSaddle('token','valentine','horse-a','invalid'))
+        """)
+        self.assertEqual(self.lua.globals().created,1)
+        self.assertEqual(len(self.lua.globals().components),3)
+
+        self.assertEqual(self.lua.globals().components[1].entity,101)
+        self.lua.execute("assert(Stables.Preview.SetSaddle('token','valentine','horse-a',nil))")
+        self.assertEqual(len(self.lua.globals().removals),8)
+        self.assertEqual(self.lua.globals().removals[4].category,0xBAA7E618)
+        self.assertEqual(self.lua.globals().removals[5].category,0x05447332)
+        self.assertEqual(self.lua.globals().removals[6].category,0xDA6DADCA)
+        self.lua.execute("GetEntityModel=function() return 999 end;assert(not Stables.Preview.SetSaddle('token','valentine','horse-a',saddle))")
+        self.assertEqual(len(self.lua.globals().components),3)
+
+    def test_missing_tack_helpers_do_not_break_ordinary_preview_or_cleanup(self):
+        self.lua.execute("Tack=nil;HorseAppearance=nil")
+        self.show()
+        self.lua.execute("Frame(300);Frame(700);assert(not Stables.Preview.CanPreviewTack());assert(not Stables.Preview.SetSaddle('token','valentine','horse-a','invalid'));Stables.Preview.Clear()")
+        self.assertEqual(self.lua.globals().deleted,1)
+        self.assertTrue(self.lua.globals().radar)
+
+    def test_saddle_survives_delayed_gender_updates_and_cleanup_forgets_entity(self):
+        self.lua.execute("""
+            Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a','female')
+            saddle=Tack.CatalogBySlot.saddle[1].id
+            Stables.Preview.SetSaddle('token','valentine','horse-a',saddle)
+            Frame(300);Frame(700)
+        """)
+        self.assertEqual(len(self.lua.globals().components),9)
+        self.lua.execute("Stables.Preview.Clear();Frame(1000);HorseAppearance.applyLoadout(101,{})")
+        self.assertEqual(len(self.lua.globals().removals),13)
+        self.assertEqual(self.lua.globals().deleted,1)
+
+    def test_saved_saddle_restores_after_temporary_selection(self):
+        self.lua.execute("""
+            saved=Tack.CatalogBySlot.saddle[1].id
+            Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a','female',{saddle={catalogId=saved}})
+            Stables.Preview.SetSaddle('token','valentine','horse-a',Tack.CatalogBySlot.saddle[2].id)
+            Stables.Preview.RestoreTack('token','valentine','horse-a')
+        """)
+        self.assertEqual(self.lua.globals().components[7].hash,self.lua.globals().Tack.CatalogBySlot.saddle[1].hash)
+        self.assertEqual(self.lua.globals().created,1)
+
+    def test_swapping_saddle_clears_implicit_parts_and_reapplies_explicit_choices(self):
+        self.lua.execute("""
+            HorseAppearance.applyLoadout(101,{saddle={catalogId=Tack.CatalogBySlot.saddle[1].id}})
+            Tack.Catalog.test_stirrup={id='test_stirrup',slot='stirrups',hash=1234}
+            Tack.Catalog.test_horn={id='test_horn',slot='saddle_horn',hash=5678}
+            HorseAppearance.applyLoadout(101,{saddle={catalogId=Tack.CatalogBySlot.saddle[2].id},
+                stirrups={catalogId='test_stirrup'},saddle_horn={catalogId='test_horn'}})
+        """)
+        self.assertEqual(self.lua.globals().components[5].hash,1234)
+        self.assertEqual(self.lua.globals().components[6].hash,5678)
+        removed=[v.category for v in self.lua.globals().removals.values()]
+        self.assertEqual(removed.count(0x05447332),3)
+        self.assertEqual(removed.count(0xDA6DADCA),3)
+
+    def test_assembly_preview_applies_once_restores_and_invalid_parts_are_atomic(self):
+        self.lua.execute("""
+            Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a','male',
+                {saddle={catalogId=Tack.CatalogBySlot.saddle[1].id}})
+            local parts={stirrups={catalogId=Tack.CatalogBySlot.stirrups[2].id},saddle_horn={catalogId=Tack.CatalogBySlot.saddle_horn[2].id}}
+            before=#components
+            assert(Stables.Preview.SetAssembly('token','valentine','horse-a',Tack.CatalogBySlot.saddle[2].id,parts))
+            assert(#components==before+3)
+            assert(components[#components-1].hash==Tack.CatalogBySlot.stirrups[2].hash)
+            before=#components
+            assert(Stables.Preview.SetAssembly('token','valentine','horse-a',Tack.CatalogBySlot.saddle[2].id,parts))
+            assert(#components==before)
+            parts.saddle_horn.catalogId='invalid'
+            assert(not Stables.Preview.SetAssembly('token','valentine','horse-a',Tack.CatalogBySlot.saddle[1].id,parts))
+            assert(#components==before)
+            Stables.Preview.RestoreTack('token','valentine','horse-a')
+            assert(components[#components-2].hash==Tack.CatalogBySlot.saddle[1].hash)
+        """)
+
+    def test_default_parts_are_stable_and_custom_parts_override_them(self):
+        self.lua.execute("""
+            for n=1,3 do
+                HorseAppearance.applyLoadout(101,{saddle={catalogId=Tack.CatalogBySlot.saddle[n].id}})
+                assert(components[#components-1].hash==0x03B3AB08)
+                assert(components[#components].hash==0x107D9598)
+            end
+            HorseAppearance.applyLoadout(101,{})
+            before=#components
+            HorseAppearance.applyLoadout(101,{})
+            assert(#components==before)
+        """)
+
+    def test_complete_loadout_applies_in_order_and_category_changes_reuse_entity(self):
+        self.lua.execute("""
+            saved={}
+            for _,slot in ipairs(Tack.PieceOrder) do saved[slot]={catalogId=Tack.CatalogBySlot[slot][1].id} end
+            Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a','male',saved)
+        """)
+        for index,slot in enumerate(('saddlecloth','saddle','stirrups','saddle_horn'),1):
+            self.assertEqual(self.lua.globals().components[index].hash,self.lua.globals().Tack.CatalogBySlot[slot][1].hash)
+        self.lua.execute("Stables.Preview.SetTack('token','valentine','horse-a','saddlecloth',Tack.CatalogBySlot.saddlecloth[2].id);Stables.Preview.RestoreTack('token','valentine','horse-a')")
+        self.assertEqual(self.lua.globals().created,1)
+        self.assertEqual(self.lua.globals().components[9].hash,self.lua.globals().Tack.CatalogBySlot.saddlecloth[1].hash)
+
+    def test_parentless_dependent_preview_is_refused_and_clearing_parent_removes_parts(self):
+        self.lua.execute("""
+            Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a')
+            assert(not Stables.Preview.SetTack('token','valentine','horse-a','stirrups',Tack.CatalogBySlot.stirrups[1].id))
+            Stables.Preview.SetTack('token','valentine','horse-a','saddle',Tack.CatalogBySlot.saddle[1].id)
+            Stables.Preview.SetTack('token','valentine','horse-a','stirrups',Tack.CatalogBySlot.stirrups[1].id)
+            Stables.Preview.SetTack('token','valentine','horse-a','saddle_horn',Tack.CatalogBySlot.saddle_horn[1].id)
+            before=#components
+            Stables.Preview.SetTack('token','valentine','horse-a','saddle',nil)
+        """)
+        self.assertEqual(len(self.lua.globals().components),self.lua.globals().before)
 
     def test_local_only_preview_and_complete_cleanup(self):
         self.show()

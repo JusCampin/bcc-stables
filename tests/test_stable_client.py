@@ -52,6 +52,33 @@ class StableClientTest(unittest.TestCase):
                 return shown~=nil and shown.token==token and shown.site==site and shown.model==model and shown.horseId==horseId
             end
             Stables.Preview.SetGender=function(value) previewGender=value end
+            Stables.Preview.CanPreviewTack=function() return true end
+            Stables.Preview.SetSaddle=function(token,site,horseId,value)
+                assert(shown and shown.token==token and shown.site==site and shown.horseId==horseId)
+                if previewSaddle~=value then saddleWrites=(saddleWrites or 0)+1 end
+                previewSaddle=value;return true
+            end
+            Stables.Preview.SetTack=function(token,site,horseId,slot,value)
+                if slot=='saddle' then return Stables.Preview.SetSaddle(token,site,horseId,value) end
+                previewOther=previewOther or {};previewOther[slot]=value;return true
+            end
+            Stables.Preview.SetAssembly=function(token,site,horseId,catalog,parts)
+                Stables.Preview.SetSaddle(token,site,horseId,catalog)
+                previewOther=previewOther or {}
+                for _,slot in ipairs({'stirrups','saddle_horn'}) do previewOther[slot]=parts[slot] and parts[slot].catalogId end
+                return true
+            end
+            Stables.Preview.SetSavedTack=function(token,site,horseId,loadout)
+                savedLoadout=loadout;previewOther={}
+                for slot,item in pairs(loadout or {}) do if slot~='saddle' then previewOther[slot]=item.catalogId end end
+                savedSaddle=loadout and loadout.saddle and loadout.saddle.catalogId
+                return Stables.Preview.SetSaddle(token,site,horseId,savedSaddle)
+            end
+            Stables.Preview.RestoreTack=function(token,site,horseId)
+                previewOther={}
+                for slot,item in pairs(savedLoadout or {}) do if slot~='saddle' then previewOther[slot]=item.catalogId end end
+                return Stables.Preview.SetSaddle(token,site,horseId,savedSaddle)
+            end
             Stables.Preview.Rotate=function() end
             Stables.Preview.StopRotation=function() rotationStopped=true end
             Stables.Horse.Call=function() horseCalls=horseCalls+1;calls[#calls+1]='horse_call' end
@@ -63,7 +90,7 @@ class StableClientTest(unittest.TestCase):
                 -- The first queued thread is the continuous native prompt loop.
                 while #threads>1 do table.remove(threads,2)() end
             end
-            function Tab(key) local index=key=='roster' and 1 or 2;navCallback({toPageId=navigation.pages[index].pageId}) end
+            function Tab(key) local index=key=='roster' and 1 or key=='catalog' and 2 or 3;navCallback({toPageId=navigation.pages[index].pageId}) end
             function Click(key) assert(pages[activePage][key],key);pages[activePage][key]() end
         ''')
         self.lua.globals().data=self.lua.table_from({'token':GEN,'site':'valentine','entries':[
@@ -76,6 +103,7 @@ class StableClientTest(unittest.TestCase):
                 calls[#calls+1]=action
                 if action=='menu_preview' and closeDuringPreview then callbacks[menuId]({event='closed'}) end
                 if action=='menu_preview' then return {ok=true,value=detail} end
+                if action=='menu_tack_shop' then return {ok=true,value=tackShop or {available=false,owned={},loadout={}}} end
                 if action=='menu_select' then
                     for _,row in ipairs(data.entries) do row.selected=row.horseId==p.horseId;row.selectionRevision=row.selectionRevision+1 end
                     detail.selected=detail.horseId==p.horseId
@@ -90,7 +118,8 @@ class StableClientTest(unittest.TestCase):
                 return {ok=true,value=data}
             end
         ''')
-        for path in ['client/core/locale.lua','client/ui/stable.lua']:
+        for path in ['config/tack/catalog.lua','config/tack/categories/saddles.lua','config/tack/categories/saddlecloths.lua','config/tack/categories/stirrups.lua','config/tack/categories/saddle_horns.lua','shared/tack.lua',
+                     'client/core/locale.lua','client/ui/stable.lua']:
             self.lua.execute((ROOT/path).read_text(encoding='utf-8'))
 
     def open(self):
@@ -107,6 +136,209 @@ class StableClientTest(unittest.TestCase):
         """)
         self.open()
         self.lua.execute("Tab('catalog');Click('breed-1');RunJobs()")
+
+    def tack(self):
+        self.open()
+        self.lua.execute("Tab('tack');RunJobs()")
+
+    def test_saddle_catalog_is_local_only_reuses_preview_and_restores_on_back(self):
+        self.tack()
+        g=self.lua.globals()
+        self.assertEqual(len(g.specs['tack-saddle']['options']),180)
+        self.assertEqual(g.labels['tack-position'],'1 of 180')
+        self.assertIn('Preview only',g.labels['tack-notice'])
+        previews=g.previews
+        self.lua.execute("saddle=Tack.CatalogBySlot.saddle[1].id;pages[activePage]['tack-saddle']({value=saddle})")
+        self.assertEqual(g.previewSaddle,g.saddle)
+        self.assertEqual(g.labels['tack-position'],'2 of 180')
+        self.assertEqual(g.labels['tack-price'],'Catalog Price: $10.00 or 1.00 gold')
+        self.lua.execute("pages[activePage]['tack-saddle']({value=saddle});Click('tack-back')")
+        self.assertIsNone(g.previewSaddle)
+        self.assertEqual(g.previews,previews)
+        self.assertEqual(g.labels['title'],'My Horses')
+        self.assertEqual(len(list(g.pages.items())),4)
+        self.assertFalse(any('purchase' in c or c=='menu_select' for c in g.calls.values()))
+
+    def test_saddle_preview_clears_on_tabs_and_ignores_destroyed_page_callbacks(self):
+        self.tack()
+        self.lua.execute("""
+            stale=pages[activePage]['tack-saddle']
+            saddle=Tack.CatalogBySlot.saddle[2].id
+            stale({value=saddle});Tab('catalog');RunJobs()
+            writes=saddleWrites
+            stale({value=saddle})
+        """)
+        g=self.lua.globals()
+        self.assertIsNone(g.previewSaddle)
+        self.assertEqual(g.saddleWrites,g.writes)
+        self.assertEqual(len(list(g.pages.items())),4)
+
+    def test_locale_change_keeps_saddle_choice_and_missing_language_falls_back(self):
+        self.tack()
+        self.lua.execute("""
+            saddle=Tack.CatalogBySlot.saddle[3].id
+            pages[activePage]['tack-saddle']({value=saddle})
+            lang='missing';events['feather-core:locale:changed']()
+        """)
+        g=self.lua.globals()
+        self.assertEqual(g.specs['tack-saddle']['value'],g.saddle)
+        self.assertEqual(g.labels['title'],'Horse Tack')
+        self.assertEqual(g.labels['tack-position'],'4 of 180')
+        self.assertEqual(g.saddleWrites,1)
+
+    def test_tack_is_a_top_tab_for_selected_horse_without_details_button(self):
+        self.tack()
+        g=self.lua.globals()
+        self.assertEqual(g.navigation.pages[3].label,'Horse Tack')
+        self.lua.execute("Tab('roster');Click('horse-1');RunJobs();Click('horse-1-details');RunJobs()")
+        self.assertIsNone(g.pages[g.activePage]['tack'])
+        self.lua.execute("Tab('catalog');Tab('tack');RunJobs()")
+        self.assertEqual(g.shown.horseId,HORSE)
+        self.assertEqual(g.labels['title'],'Horse Tack')
+
+    def test_tack_tab_without_selection_gives_guidance_without_preview(self):
+        self.lua.execute("data.entries[1].selected=false;detail.selected=false")
+        self.open()
+        self.lua.execute("Tab('tack');RunJobs()")
+        self.assertIn('Select a stored horse',self.lua.globals().labels['tack-empty'])
+        self.assertIsNone(self.lua.globals().shown)
+        self.lua.execute("Tab('roster');Click('horse-1');RunJobs();Tab('tack');RunJobs()")
+        self.assertEqual(self.lua.globals().labels['title'],'Horse Tack')
+        self.assertIsNotNone(self.lua.globals().specs['tack-saddle'])
+
+    def paid_tack(self):
+        self.lua.execute('''
+            tackShop={available=true,purchases=true,owned={},loadout={},conditionMaximum=100}
+            local original=Stables.Client.Rpc
+            Stables.Client.Rpc=function(action,p)
+                if action=='menu_tack_quote' then
+                    tackQuote={operationId=data.token,catalogId=p.catalogId,amount=1000,currency=p.currency,state='reserved'}
+                    quoteCalls=(quoteCalls or 0)+1;return {ok=true,value=tackQuote}
+                end
+                if action=='menu_tack_confirm' then
+                    confirmedTack=p.operationId
+                    if tackFailure then return {ok=false,code=tackFailure} end
+                    tackShop.owned[#tackShop.owned+1]={instanceId=101,revision=0,catalogId=tackQuote.catalogId,condition=100}
+                    return {ok=true,value={state='fulfilled',instanceId=101}}
+                end
+                if action=='menu_tack_equip' then
+                    equipRequest=p;tackShop.loadout[p.slot or 'saddle']=p.instanceId>0 and p.instanceId or nil
+                    for _,item in ipairs(tackShop.owned) do if item.instanceId==p.instanceId then item.horseId=p.horseId end end
+                    return {ok=true,value=tackShop}
+                end
+                return original(action,p)
+            end
+        ''')
+        self.tack()
+        self.lua.execute("pages[activePage]['tack-saddle']({value=Tack.CatalogBySlot.saddle[1].id})")
+
+    def test_tack_purchase_then_separate_equip_and_unequip_preserve_collection(self):
+        self.paid_tack()
+        g=self.lua.globals()
+        self.lua.execute("Click('tack-purchase');RunJobs()")
+        self.assertIn('$10.00',g.specs['tack-purchase']['confirm']['message'])
+        self.lua.execute("Click('tack-purchase');RunJobs()")
+        self.assertEqual(g.specs['tack-owned']['value'],'101')
+        self.assertIsNone(g.tackShop.loadout.saddle)
+        self.lua.execute("Click('tack-equip');RunJobs();Tab('roster')")
+        self.assertEqual(g.equipRequest.instanceId,101)
+        self.assertEqual(g.previewSaddle,g.tackQuote.catalogId)
+        self.lua.execute("Tab('tack');RunJobs();pages[activePage]['tack-owned']({value='none'});Click('tack-equip');RunJobs()")
+        self.assertIsNone(g.tackShop.loadout.saddle)
+        self.assertEqual(len(g.tackShop.owned),1)
+
+    def test_tack_pending_quote_keeps_same_purchase_after_refresh(self):
+        self.paid_tack()
+        self.lua.execute("Click('tack-purchase');RunJobs();tackFailure='tack_pending';Click('tack-purchase');RunJobs();Click('tack-refresh');RunJobs();tackFailure=nil;Click('tack-purchase');RunJobs()")
+        self.assertEqual(self.lua.globals().quoteCalls,1)
+        self.assertEqual(self.lua.globals().confirmedTack,GEN)
+
+    def test_tack_category_catalog_counts_and_localized_labels(self):
+        self.tack()
+        self.assertEqual(len(self.lua.globals().specs['tack-category']['options']),4)
+        for slot,count,label in [('saddlecloth',67,'Saddlecloths'),('stirrups',55,'Stirrups'),('saddle_horn',68,'Saddle Horns')]:
+            self.lua.execute(f"pages[activePage]['tack-category']({{value='{slot}'}})")
+            self.assertEqual(len(self.lua.globals().specs['tack-saddle']['options']),count)
+            self.assertEqual(self.lua.globals().specs['tack-saddle']['label'],label)
+        self.lua.execute("lang='missing';events['feather-core:locale:changed']()")
+        self.assertEqual(self.lua.globals().specs['tack-category']['value'],'saddle_horn')
+
+    def buy_new_category(self,slot):
+        self.paid_tack()
+        self.lua.execute("""
+            tackShop.owned={{instanceId=100,revision=0,catalogId=Tack.CatalogBySlot.saddle[1].id,condition=100,horseId=detail.horseId}}
+            tackShop.loadout.saddle=100
+            Click('tack-refresh');RunJobs()
+        """)
+        self.lua.execute(f"pages[activePage]['tack-category']({{value='{slot}'}});pages[activePage]['tack-saddle']({{value=Tack.CatalogBySlot['{slot}'][1].id}})")
+        self.lua.execute("Click('tack-purchase');RunJobs();Click('tack-purchase');RunJobs()")
+        self.assertEqual(self.lua.globals().specs['tack-category']['value'],slot)
+        self.assertEqual(len(self.lua.globals().specs['tack-owned']['options']),2)
+        self.assertFalse(self.lua.globals().specs['tack-equip']['disabled'])
+        self.lua.execute("Click('tack-equip');RunJobs();Tab('roster')")
+        self.assertEqual(self.lua.globals().equipRequest.slot,slot)
+        self.assertEqual(self.lua.globals().tackShop.loadout[slot],101)
+        self.assertIsNotNone(self.lua.globals().previewSaddle)
+        self.assertEqual(self.lua.globals().previewOther[slot],self.lua.globals().Tack.CatalogBySlot[slot][1].id)
+
+    def test_saddlecloth_purchase_equip_uses_its_own_slot(self): self.buy_new_category('saddlecloth')
+    def test_stirrup_purchase_equip_uses_its_own_slot(self): self.buy_new_category('stirrups')
+    def test_horn_purchase_equip_uses_its_own_slot(self): self.buy_new_category('saddle_horn')
+
+    def test_equipped_piece_move_has_confirmation_and_explicit_source(self):
+        self.lua.execute("""
+            tackShop={available=true,purchases=true,loadout={},owned={{instanceId=101,revision=4,
+                catalogId=Tack.CatalogBySlot.saddle[1].id,condition=67,horseId='22222222-2222-4222-8222-222222222222'}}}
+            local original=Stables.Client.Rpc
+            Stables.Client.Rpc=function(action,p)
+                if action=='menu_tack_equip' then equipRequest=p;return {ok=false,code='tack_conflict'} end
+                return original(action,p)
+            end
+        """)
+        self.tack()
+        self.lua.execute("pages[activePage]['tack-owned']({value='101'})")
+        self.assertIn('Move this tack',self.lua.globals().specs['tack-equip']['confirm']['message'])
+        self.lua.execute("Click('tack-equip');RunJobs()")
+        self.assertEqual(self.lua.globals().equipRequest.fromHorseId,'22222222-2222-4222-8222-222222222222')
+        self.assertIn('Refresh',self.lua.globals().labels['tack-error'])
+
+    def test_owned_assembly_preview_uses_its_parts_and_detach_carries_source_anchor(self):
+        self.lua.execute("""
+            tackShop={available=true,purchases=true,loadout={},owned={
+                {instanceId=101,slot='saddle',revision=0,catalogId=Tack.CatalogBySlot.saddle[1].id,condition=100},
+                {instanceId=102,slot='stirrups',revision=2,catalogId=Tack.CatalogBySlot.stirrups[2].id,condition=75,saddleId=101}}}
+            local original=Stables.Client.Rpc
+            Stables.Client.Rpc=function(action,p)
+                if action=='menu_tack_equip' then equipRequest=p;return {ok=false,code='tack_conflict'} end
+                return original(action,p)
+            end
+        """)
+        self.tack()
+        self.lua.execute("pages[activePage]['tack-owned']({value='101'})")
+        self.assertEqual(self.lua.globals().previewOther.stirrups,self.lua.globals().Tack.CatalogBySlot.stirrups[2].id)
+        self.lua.execute("pages[activePage]['tack-category']({value='stirrups'});pages[activePage]['tack-owned']({value='102'});Click('tack-detach');RunJobs()")
+        self.assertTrue(self.lua.globals().equipRequest.detach)
+        self.assertEqual(self.lua.globals().equipRequest.fromSaddleId,101)
+        self.assertEqual(self.lua.globals().equipRequest.expectedInstanceId,102)
+
+    def test_stable_collection_explains_shared_storage(self):
+        self.lua.execute("tackShop={available=true,purchases=true,storage='stable',loadout={},owned={}}")
+        self.tack()
+        self.assertIn('available at every stable',self.lua.globals().labels['tack-storage'])
+
+    def test_active_horse_cannot_enter_saddle_browser(self):
+        self.open()
+        self.lua.execute("detail.availability='active';Tab('tack');RunJobs()")
+        self.assertIn('Select a stored horse',self.lua.globals().labels['tack-empty'])
+        self.assertIsNone(self.lua.globals().previewSaddle)
+
+    def test_missing_tack_scripts_preserve_details_and_report_loading_problem(self):
+        self.open()
+        self.lua.execute("Click('horse-1');RunJobs();Click('horse-1-details');RunJobs();Stables.Preview.CanPreviewTack=function() return false end;Tack=nil;HorseAppearance=nil;Tab('tack');RunJobs()")
+        self.assertEqual(self.lua.globals().labels['title'],'Stats & Details')
+        self.assertIn('Tack scripts are not loaded',self.lua.globals().lastMessage)
+        self.lua.execute("Click('close');RunJobs()")
+        self.assertEqual(self.lua.globals().destroyed,1)
 
     def test_catalog_coats_prices_and_stats_are_read_only(self):
         self.catalog()
@@ -130,7 +362,7 @@ class StableClientTest(unittest.TestCase):
         self.assertEqual(self.lua.globals().previews,previews)
         self.lua.execute("Tab('roster');RunJobs()")
         self.assertEqual(self.lua.globals().shown.horseId,HORSE)
-        self.assertEqual(len(list(self.lua.globals().pages.items())),3)
+        self.assertEqual(len(list(self.lua.globals().pages.items())),4)
 
     def test_catalog_loading_fences_coat_changes_and_failure_clears_old_preview(self):
         self.catalog()
@@ -152,7 +384,7 @@ class StableClientTest(unittest.TestCase):
         self.assertEqual(self.lua.globals().specs['catalog-coat']['value'],'a_c_horse_morgan_palomino')
         self.assertEqual(self.lua.globals().shown.horseId,'catalog:a_c_horse_morgan_palomino')
         self.assertEqual(list(self.lua.globals().calls.values()).count('menu_open'),1)
-        self.assertEqual(len(list(self.lua.globals().pages.items())),3)
+        self.assertEqual(len(list(self.lua.globals().pages.items())),4)
         self.assertTrue(self.lua.globals().navigation['controlled'])
 
     def test_tabs_localize_and_replace_duplicate_navigation_buttons(self):
@@ -178,7 +410,7 @@ class StableClientTest(unittest.TestCase):
         self.assertEqual(self.lua.globals().labels['title'],'Catalogue')
         self.assertEqual(self.lua.globals().specs['catalog-coat']['value'],'a_c_horse_morgan_bay')
         self.assertEqual(self.lua.globals().previews,before)
-        self.assertEqual(len(list(self.lua.globals().pages.items())),3)
+        self.assertEqual(len(list(self.lua.globals().pages.items())),4)
 
     def test_catalog_empty_and_return_to_empty_roster_clear_preview(self):
         self.lua.execute("Horses.BreedsOrder={};data.entries={}")
@@ -296,7 +528,7 @@ class StableClientTest(unittest.TestCase):
         self.open()
         self.lua.execute("dictionaries.fr_fr.stables_menu_title='Mes chevaux';lang='fr_fr';events['feather-core:locale:changed']()")
         self.assertEqual(self.lua.globals().labels['title'],'Mes chevaux')
-        self.assertEqual(len(list(self.lua.globals().pages.items())),3)
+        self.assertEqual(len(list(self.lua.globals().pages.items())),4)
 
     def details(self):
         self.open()
@@ -331,7 +563,7 @@ class StableClientTest(unittest.TestCase):
         self.lua.execute("Click('back')")
         self.assertEqual(self.lua.globals().labels['title'],'My Horses')
         self.assertTrue(self.lua.globals().rotationStopped)
-        self.assertEqual(len(list(self.lua.globals().pages.items())),3)
+        self.assertEqual(len(list(self.lua.globals().pages.items())),4)
         self.assertEqual(self.lua.globals().previews,previews)
         self.assertNotIn('menu_close',list(self.lua.globals().calls.values()))
 
@@ -339,7 +571,7 @@ class StableClientTest(unittest.TestCase):
         self.details()
         self.lua.execute("dictionaries.fr_fr.stables_menu_details='Détails';lang='fr_fr';events['feather-core:locale:changed']()")
         self.assertEqual(self.lua.globals().labels['title'],'Détails')
-        self.assertEqual(len(list(self.lua.globals().pages.items())),3)
+        self.assertEqual(len(list(self.lua.globals().pages.items())),4)
 
     def test_horse_actions_and_details_use_existing_accordion_sections(self):
         self.open()

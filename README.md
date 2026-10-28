@@ -7,6 +7,29 @@
 > (default false). One paid purchase/call/store path is live-confirmed; broader
 > fault/concurrency acceptance remains pending. It uses the
 > existing Feather Stables schema 11; do not install the VORP SQL below.
+> Feeding is implemented behind `Config.feeding.enabled` (default false), using
+> food item use in Inventory and its durable consumption receipts. Per-food core
+> benefits are configured in `Config.feeding.foods`; there is no custom Feed prompt.
+> Feeding, cancellation and saved-core store/recall have passed live testing.
+> Inventory brushing with receipt-backed durability is implemented behind
+> `Config.brushing.enabled` (default false); cancellation, mounted use and final-use
+> wear reporting have passed live testing.
+> The Horse Tack tab browses saddles, saddlecloths, stirrups and saddle horns on the
+> selected horse preview. Character-owned purchases, moving/equipping pieces and
+> saved equipment restoration are implemented behind `Config.tack.enabled`
+> (default false); purchase, equip, moving between horses and recall passed live
+> testing for all four categories. Saddle assemblies now keep fitted horns/stirrups
+> together through movement and unequip; the assembly checks passed live testing.
+> Individual parts can be removed separately. Private stable tack storage is
+> implemented and reported working in live testing: existing pieces migrate with their IDs,
+> condition and assemblies intact, and new purchases go directly to the collection.
+> Food and brushes remain carried items.
+> Rerun the updated [feather_tack.sql](database/feather_tack.sql)
+> and retain Inventory's trusted unique-grant entry for `bcc-stables`. Paid purchases
+> also require `Config.commerce.purchasesEnabled`. Assemblies require Inventory
+> scoped collection APIs and the `TrustedCharacterCollections` policy; deploy
+> the matching Inventory provider update.
+> Install missing Feather item definitions with [feather_items.sql](database/feather_items.sql).
 > See [integration status and testing](docs/FEATHER_INTEGRATION.md).
 
 Abilities, trading and training are being consolidated into this resource.

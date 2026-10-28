@@ -41,6 +41,13 @@ local function start()
         end
         seen[row.id]=true
     end
+    if Stables.Feeding and Stables.Feeding.Enabled() then
+        local probe=Stables.Feeding.Probe();if not probe.ok then return probe end
+    end
+    if Stables.Tack then local tack=Stables.Tack.Start();if not tack.ok then return tack end end
+    if Stables.Feeding then
+        local feed=Stables.Feeding.Start();if not feed.ok then return feed end
+    end
     local installed=Stables.HorseController.Install()
     if not installed.ok then return installed end
     if Stables.Checkout then Stables.Checkout.Start() end
@@ -49,12 +56,13 @@ local function start()
 end
 exports('GetHealth',function()
     return F.Ok({state=health.state,code=health.code,schemaVersion=health.schemaVersion,
-        features={call=health.features.call,whistle=health.features.whistle,care=false,commerce=health.features.commerce,menus=health.features.menus}})
+        features={call=health.features.call,whistle=health.features.whistle,care=health.features.care,commerce=health.features.commerce,menus=health.features.menus,tack=health.features.tack}})
 end)
 RegisterCommand('BccStablesStatus',function(source)
     if source~=0 then return end
     print('[bcc-stables] '..json.encode({state=health.state,code=health.code,
-        schemaVersion=health.schemaVersion,features=health.features,calls=Stables.HorseController.Status(),purchases=Stables.Checkout and Stables.Checkout.Status() or nil}))
+        schemaVersion=health.schemaVersion,features=health.features,calls=Stables.HorseController.Status(),purchases=Stables.Checkout and Stables.Checkout.Status() or nil,
+        tack=Stables.Tack and Stables.Tack.Status() or nil}))
 end,true)
 CreateThread(function()
     local called,result=pcall(start)
@@ -67,10 +75,12 @@ CreateThread(function()
     health.state,health.features.call,health.features.whistle='ready',true,true
     health.features.menus=Stables.StableMenu~=nil
     health.features.commerce=Stables.Checkout and Stables.Checkout.Enabled() or false
-    print('[bcc-stables] Feather horse lifecycle/whistle ready; stable roster ready; purchase checkout follows Config.commerce; care remains disabled.')
+    health.features.care=Stables.Feeding and Stables.Feeding.Enabled() or false
+    health.features.tack=Stables.Tack and Stables.Tack.Enabled() or false
+    print('[bcc-stables] Feather horse lifecycle and menus ready; checkout and feeding follow configuration.')
 end)
 AddEventHandler('onResourceStop',function(resource)
-    if resource==GetCurrentResourceName() or resource=='feather-core' or resource=='feather-mysql' or resource=='feather-assets' then
+    if resource==GetCurrentResourceName() or resource=='feather-core' or resource=='feather-mysql' or resource=='feather-assets' or resource=='feather-inventory' then
         health.state,health.features.call,health.features.whistle='stopped',false,false
     end
 end)
