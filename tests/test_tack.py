@@ -35,7 +35,7 @@ class TackTest(unittest.TestCase):
             api.Items.GetDefinitions=function() return {ok=true,value={{id=7,name='horse_saddle',type='item_item',instance_mode='unique',max_stack_size=1},
                 {id=8,name='horse_saddlecloth',type='item_item',instance_mode='unique',max_stack_size=1},
                 {id=9,name='horse_stirrups',type='item_item',instance_mode='unique',max_stack_size=1},
-                {id=10,name='horse_saddle_horn',type='item_item',instance_mode='unique',max_stack_size=1}}} end
+                {id=10,name='horse_saddle_horn',type='item_item',instance_mode='unique',max_stack_size=1},{id=11,name='horse_saddlebag',type='item_item',instance_mode='unique',max_stack_size=1},{id=12,name='horse_bedroll',type='item_item',instance_mode='unique',max_stack_size=1},{id=13,name='horse_bridle',type='item_item',instance_mode='unique',max_stack_size=1},{id=14,name='horse_holster',type='item_item',instance_mode='unique',max_stack_size=1},{id=15,name='horse_horseshoes',type='item_item',instance_mode='unique',max_stack_size=1},{id=16,name='horse_mask',type='item_item',instance_mode='unique',max_stack_size=1},{id=17,name='horse_mane',type='item_item',instance_mode='unique',max_stack_size=1},{id=18,name='horse_tail',type='item_item',instance_mode='unique',max_stack_size=1},{id=19,name='horse_mustache',type='item_item',instance_mode='unique',max_stack_size=1}}} end
             api.GetCharacterInventory=function() return {ok=true,value={id=99}} end
             api.Inventory.GetInventoryItems=function(inventoryId)
                 local rows={}
@@ -137,7 +137,7 @@ class TackTest(unittest.TestCase):
             end
             Stables.Checkout.Enabled=function() return Config.commerce.purchasesEnabled end
         ''')
-        for path in ('config/tack/catalog.lua','config/tack/categories/saddles.lua','config/tack/categories/saddlecloths.lua','config/tack/categories/stirrups.lua','config/tack/categories/saddle_horns.lua','shared/tack.lua','server/tack/feather.lua'):
+        for path in ('config/tack/catalog.lua','config/tack/categories/saddles.lua','config/tack/categories/saddlecloths.lua','config/tack/categories/stirrups.lua','config/tack/categories/saddle_horns.lua','config/tack/categories/saddle_bags.lua','config/tack/categories/bedrolls.lua','config/tack/categories/bridles.lua','config/tack/categories/holsters.lua','config/tack/categories/horseshoes.lua','config/tack/categories/masks.lua','config/tack/categories/manes.lua','config/tack/categories/tails.lua','config/tack/categories/mustaches.lua','shared/tack.lua','server/tack/feather.lua'):
             self.lua.execute((ROOT/path).read_text(encoding='utf-8'))
         self.tack=self.lua.globals().Stables.Tack
         self.assertTrue(self.tack.Start()['ok'])
@@ -286,6 +286,33 @@ class TackTest(unittest.TestCase):
         self.lua.globals().pieces[piece].equipmentSnapshot=None
         self.assertFalse(self.lua.globals().guards.move(self.lua.globals().pieces[piece])[0])
 
+    def test_remaining_categories_purchase_equip_move_and_unequip(self):
+        saddle_a=self.buy().instanceId;self.assertTrue(self.equip(saddle_a).ok)
+        saddle_b=self.buy().instanceId;self.assertTrue(self.equip(saddle_b,SECOND).ok)
+        for slot in ('saddlebag','bedroll','bridle','holster','horseshoes','mask','mane','tail','mustache'):
+            with self.subTest(slot=slot):
+                self.catalog=self.lua.globals().Tack.CatalogBySlot[slot][1].id
+                piece=self.buy().instanceId
+                self.assertTrue(self.equip(piece,slot=slot).ok)
+                self.assertEqual(self.tack.Loadout(self.lua.globals().session,HORSE).value[slot].instanceId,piece)
+                self.assertTrue(self.equip(piece,SECOND,source=HORSE,slot=slot).ok)
+                self.assertIsNone(self.tack.Loadout(self.lua.globals().session,HORSE).value[slot])
+                self.assertTrue(self.equip(0,SECOND,expected=piece,slot=slot).ok)
+                self.assertIsNone(self.tack.Loadout(self.lua.globals().session,SECOND).value[slot])
+
+    def test_independent_saddle_accessories_require_saddle_and_fence_removal(self):
+        for slot in ('saddlebag','bedroll','holster'):
+            self.catalog=self.lua.globals().Tack.CatalogBySlot[slot][1].id
+            piece=self.buy().instanceId
+            self.assertEqual(self.equip(piece,slot=slot).code,'tack_saddle_required')
+            self.catalog=self.lua.globals().Tack.CatalogBySlot.saddle[1].id
+            saddle=self.buy().instanceId;self.assertTrue(self.equip(saddle).ok)
+            self.assertTrue(self.equip(piece,slot=slot).ok)
+            self.assertEqual(self.equip(0,expected=saddle).code,'tack_dependents_equipped')
+            self.assertEqual(self.equip(saddle,SECOND,source=HORSE).code,'tack_dependents_equipped')
+            self.assertTrue(self.equip(0,expected=piece,slot=slot).ok)
+            self.assertTrue(self.equip(0,expected=saddle).ok)
+
     def test_each_new_category_moves_same_piece_preserving_other_horse_equipment(self):
         saddle_a=self.buy().instanceId;self.assertTrue(self.equip(saddle_a)['ok'])
         saddle_b=self.buy().instanceId;self.assertTrue(self.equip(saddle_b,SECOND)['ok'])
@@ -431,6 +458,15 @@ class TackTest(unittest.TestCase):
         self.assertFalse(self.quote()['ok'])
         self.assertEqual(self.lua.globals().charges,0)
         self.assertEqual(self.lua.globals().grants,0)
+
+    def test_component_fit_fences_parent_moved_after_snapshot(self):
+        saddle=self.buy().instanceId;self.assertTrue(self.equip(saddle)['ok'])
+        self.catalog=self.lua.globals().Tack.CatalogBySlot.stirrups[1].id
+        component=self.buy().instanceId
+        self.lua.execute(f"batchHook=function() equipmentRows['horse_{HORSE}']=nil;equipmentRows['tack_saddle_{saddle}']={saddle};batchHook=nil end")
+        self.assertFalse(self.equip(component,slot='stirrups')['ok'])
+        self.assertIsNone(self.lua.globals().equipmentRows['tack_stir_'+str(saddle)])
+        self.assertIsNotNone(self.lua.globals().pieces[component])
 
     def test_old_saddle_receipt_and_slot_remain_compatible(self):
         import json

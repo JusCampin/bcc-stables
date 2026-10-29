@@ -47,7 +47,7 @@ function HorseAppearance.applyLoadout(entity, loadout)
     for _, slot in ipairs(Tack.Slots) do
         local equipped = type(loadout) == 'table' and loadout[slot.id]
         local policy = Tack.PieceSlots and Tack.PieceSlots[slot.id]
-        if policy and policy.requiresSaddle and not loadout.saddle then equipped = nil end
+        if policy and (policy.requiresSaddle or policy.needsSaddle) and not loadout.saddle then equipped = nil end
         if not equipped and saddleItem and Tack.SaddleDefaults and Tack.SaddleDefaults[slot.id] then
             equipped = {catalogId=Tack.SaddleDefaults[slot.id]}
         end

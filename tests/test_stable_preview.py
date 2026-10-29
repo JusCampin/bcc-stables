@@ -60,7 +60,7 @@ class PreviewTest(unittest.TestCase):
             DisplayRadar=function(value) radar=value end
             IsCurrent=function() return valid end
         ''')
-        for path in ('config/tack/catalog.lua', 'config/tack/categories/saddles.lua','config/tack/categories/saddlecloths.lua','config/tack/categories/stirrups.lua','config/tack/categories/saddle_horns.lua',
+        for path in ('config/tack/catalog.lua', 'config/tack/categories/saddles.lua','config/tack/categories/saddlecloths.lua','config/tack/categories/stirrups.lua','config/tack/categories/saddle_horns.lua','config/tack/categories/saddle_bags.lua','config/tack/categories/bedrolls.lua','config/tack/categories/bridles.lua','config/tack/categories/holsters.lua','config/tack/categories/horseshoes.lua','config/tack/categories/masks.lua','config/tack/categories/manes.lua','config/tack/categories/tails.lua','config/tack/categories/mustaches.lua',
                      'shared/tack.lua', 'client/tack/controller.lua', 'client/ui/preview.lua'):
             self.lua.execute((ROOT/path).read_text())
 
@@ -170,11 +170,21 @@ class PreviewTest(unittest.TestCase):
             for _,slot in ipairs(Tack.PieceOrder) do saved[slot]={catalogId=Tack.CatalogBySlot[slot][1].id} end
             Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a','male',saved)
         """)
-        for index,slot in enumerate(('saddlecloth','saddle','stirrups','saddle_horn'),1):
+        for index,slot in enumerate(('saddlecloth','saddle','stirrups','saddlebag','mane','tail','saddle_horn','bedroll','mask','mustache','holster','bridle','horseshoes'),1):
             self.assertEqual(self.lua.globals().components[index].hash,self.lua.globals().Tack.CatalogBySlot[slot][1].hash)
         self.lua.execute("Stables.Preview.SetTack('token','valentine','horse-a','saddlecloth',Tack.CatalogBySlot.saddlecloth[2].id);Stables.Preview.RestoreTack('token','valentine','horse-a')")
         self.assertEqual(self.lua.globals().created,1)
-        self.assertEqual(self.lua.globals().components[9].hash,self.lua.globals().Tack.CatalogBySlot.saddlecloth[1].hash)
+        self.assertEqual(self.lua.globals().components[27].hash,self.lua.globals().Tack.CatalogBySlot.saddlecloth[1].hash)
+
+    def test_tail_and_saddlecloth_have_distinct_removal_categories(self):
+        self.lua.execute("""
+            assert(Tack.GetSlot('tail').category==0xA63CAE10)
+            assert(Tack.GetSlot('tail').category~=Tack.GetSlot('saddlecloth').category)
+            Stables.Preview.Show('token','valentine','a_c_horse_morgan_bay',IsCurrent,'horse-a')
+            for _,slot in ipairs({'saddlebag','bedroll','holster'}) do
+                assert(not Stables.Preview.SetTack('token','valentine','horse-a',slot,Tack.CatalogBySlot[slot][1].id))
+            end
+        """)
 
     def test_parentless_dependent_preview_is_refused_and_clearing_parent_removes_parts(self):
         self.lua.execute("""

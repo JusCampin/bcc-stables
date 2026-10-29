@@ -6,7 +6,7 @@ Tack.Slots = {
     { id = 'stirrups',    source = 'Stirrups',     label = 'Stirrups',     category = 0xDA6DADCA },
     { id = 'saddlebag',   source = 'SaddleBags',   label = 'Saddlebags',   category = 0x80451C25 },
     { id = 'mane',        source = 'Manes',        label = 'Manes',        category = 0xAA0217AB },
-    { id = 'tail',        source = 'Tails',        label = 'Tails',        category = 0x17CEB41A },
+    { id = 'tail',        source = 'Tails',        label = 'Tails',        category = 0xA63CAE10 },
     { id = 'saddle_horn', source = 'SaddleHorns',  label = 'Saddle Horns', category = 0x05447332 },
     { id = 'bedroll',     source = 'Bedrolls',     label = 'Bedrolls',     category = 0xEFB31921 },
     { id = 'mask',        source = 'Masks',        label = 'Masks',        category = 0xD3500E5D },
@@ -18,7 +18,7 @@ Tack.Slots = {
 
 -- Feather item ownership/assignment policies for the currently enabled categories.
 -- Keep the original saddle slot name so existing equipment and receipts replay.
-Tack.PieceOrder = {'saddle', 'saddlecloth', 'stirrups', 'saddle_horn'}
+Tack.PieceOrder = {'saddle', 'saddlecloth', 'stirrups', 'saddle_horn', 'saddlebag', 'bedroll', 'bridle', 'holster', 'horseshoes', 'mask', 'mane', 'tail', 'mustache'}
 -- Component ownership is anchored to the saddle instance, even while stored.
 Tack.AssemblyPrefixes = {stirrups='tack_stir_',saddle_horn='tack_horn_'}
 -- Included visual parts when a saddle has no separately equipped upgrade.
@@ -31,6 +31,15 @@ Tack.PieceSlots = {
     saddlecloth = {itemName='horse_saddlecloth',prefix='horse_cloth_',labelKey='saddlecloths',numberKey='saddleclothNumber',pattern='^Saddlecloth (%d+)$',emptyKey='noSaddlecloth'},
     stirrups = {itemName='horse_stirrups',prefix='horse_stir_',labelKey='stirrups',numberKey='stirrupNumber',pattern='^Stirrup (%d+)$',emptyKey='saddleDefault',requiresSaddle=true},
     saddle_horn = {itemName='horse_saddle_horn',prefix='horse_horn_',labelKey='saddleHorns',numberKey='saddleHornNumber',pattern='^Saddle Horn (%d+)$',emptyKey='saddleDefault',requiresSaddle=true},
+    saddlebag = {itemName='horse_saddlebag',prefix='horse_bag_',labelKey='saddlebags',numberKey='saddlebagNumber',pattern='^Saddlebag (%d+)$',emptyKey='noSaddlebag',needsSaddle=true},
+    bedroll = {itemName='horse_bedroll',prefix='horse_roll_',labelKey='bedrolls',numberKey='bedrollNumber',pattern='^Bedroll (%d+)$',emptyKey='noBedroll',needsSaddle=true},
+    bridle = {itemName='horse_bridle',prefix='horse_bridle_',labelKey='bridles',numberKey='bridleNumber',pattern='^Bridle (%d+)$',emptyKey='noBridle'},
+    holster = {itemName='horse_holster',prefix='horse_holster_',labelKey='holsters',numberKey='holsterNumber',pattern='^Holster (%d+)$',emptyKey='noHolster',needsSaddle=true},
+    horseshoes = {itemName='horse_horseshoes',prefix='horse_shoes_',labelKey='horseshoes',numberKey='horseshoesNumber',pattern='^Horseshoe (%d+)$',emptyKey='noHorseshoe'},
+    mask = {itemName='horse_mask',prefix='horse_mask_',labelKey='masks',numberKey='maskNumber',pattern='^Mask (%d+)$',emptyKey='noMask'},
+    mane = {itemName='horse_mane',prefix='horse_mane_',labelKey='manes',numberKey='maneNumber',pattern='^Mane (%d+)$',emptyKey='noMane'},
+    tail = {itemName='horse_tail',prefix='horse_tail_',labelKey='tails',numberKey='tailNumber',pattern='^Tail (%d+)$',emptyKey='noTail'},
+    mustache = {itemName='horse_mustache',prefix='horse_must_',labelKey='mustaches',numberKey='mustacheNumber',pattern='^Mustache (%d+)$',emptyKey='noMustache'},
 }
 
 Tack.SlotsById = {}

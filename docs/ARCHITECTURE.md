@@ -9,6 +9,27 @@
 
 ## Current Feather boundaries
 
+Tack collection access is independent of owning/selecting a horse. An omitted
+horseId reads only the character's Inventory collection and returns no equipped
+horse loadout. The UI uses its existing local-only preview lifecycle for a labelled
+Morgan Bay display horse when no owned selection exists; display identity never
+crosses an ownership/mutation RPC. Equip remains owned-horse-only. Parked assembly
+part removal can omit horseId but cannot affect tack assigned to an actual horse.
+Purchases/resale/trades retain their provider/consent contracts. No starter grant.
+325 Stables tests pass; no-horse recipient live preview/inspection pending.
+
+Player tack trades use two explicit menu consent stages followed by durable
+provider receipts. Independently attested private preview routes at the same
+stable authorize proximity; equal preview bucket IDs are not required. Inventory
+moves existing instances/parked anchors between collections atomically and keeps
+purchase provenance unchanged. Stables coordinates free handovers or buyer debit,
+custody transfer and seller payout through fs_tack_trades. Unknown replies replay;
+only certain custody refusal refunds an exact captured payment. Accepted settlement
+survives session/resource loss; unaccepted offers cannot cross menu sessions.
+317 Stables/30 Inventory transaction tests and existing Lua regressions pass;
+live player trade acceptance remains pending. See deployment/test gate in
+FEATHER_INTEGRATION.md. Existing resale/storage acceptance is unchanged.
+
 Tack ownership is character-scoped, not horse-scoped. Each purchased piece has its
 own durable identity and belongs to the character independently of any horse.
 Horse loadouts reference those owned pieces; a piece may be equipped on at most
@@ -19,8 +40,8 @@ must never serve as tack ownership, and tack purchases must not be modeled as
 per-horse appearance unlocks. The four-category tack flow implements this through
 Inventory unique items and generic equipment slots (`horse_<horse UUID>`), behind
 `Config.tack.enabled`. Inventory owns both item and assignment persistence, with
-one-instance/one-slot uniqueness. Stables stores only `fs_tack_orders` for durable
-quotes, payment and item-delivery recovery; no duplicate tack inventory/loadout
+one-instance/one-slot uniqueness. Stables stores `fs_tack_orders` and `fs_tack_sales` for durable
+quotes, purchase delivery and resale coordination; no duplicate tack inventory/loadout
 table is introduced. `database/feather_tack.sql` installs that optional table and
 the non-weapon unique `horse_saddle`, `horse_saddlecloth`, `horse_stirrups` and
 `horse_saddle_horn` definitions; the base migration ledger stays11.
@@ -57,7 +78,8 @@ Saddle Default restores fixed included parts (Stirrup 1 and Saddle Horn 1) witho
 Existing saddle equipment slots and saddle.v1 order/grant receipts remain compatible.
 All four categories passed the requested live checks. Assembly movement, breakdown and native recall
 also passed the requested live gate on 2026-10-28. Private stable custody is now
-implemented and reported working live on 2026-10-28; sale and trade remain pending.
+implemented and reported working live on 2026-10-28. Single-piece and saddle assembly
+buy-back also passed controlled live testing; player trading remains pending.
 Inventory's inventory_character_collections mapping owns one private container per
 resource/purpose/character. Stables uses stables.tack.v1 at every stable. Containers
 have no carried character_id, generic owner/public access or client open path. Only
@@ -73,6 +95,21 @@ slots (default 500), separate from carried weight/slots; food/brushes stay carri
 Collection readiness is part of Inventory startup; its optional mapping table is
 created there. A location/identity mismatch refuses access instead of recreating
 contents. No extra Stables schema, custody table, worker or proof command is added.
+Resale quotes freeze original paid price, current item revision/condition, fitted
+assembly membership, original currencies and payout accounts. Fitted tack is refused;
+a parked saddle includes its horn/stirrups, while saddlecloths remain independent.
+Inventory's durable exact-instance retirement receipt atomically verifies custody,
+revisions and expected equipment (including empty attachment anchors), removes the
+assembly and stores the historical result. It pays no money. Stables then requests
+idempotent per-currency Economy Issue payouts. Interrupted/partial payment remains
+owed and resumes through the existing bounded checkout worker; no replacement item
+is granted as compensation. CheckIssue reuses Economy's supply authorization without
+posting, verifying the player's wallet and system source before surrender. Admin's
+service grant authenticates the Economy broker/Stables principal, and Economy admits
+only configured issue reasons. Client players gain no direct issue grant. New RPCs
+use the existing stable menu session, localized quote/confirmation and same-operation
+retry. Item pricing never comes from the client. Component fitting now includes a
+parent item/assignment comparison in its provider batch to fence concurrent changes.
 Legacy VORP tack services remain unloaded.
 
 Core owns current character/session identity; Assets owns canonical horse
@@ -192,3 +229,5 @@ only a stable coat identifier on the horse record once that feature is implement
 Breeding belongs to `bcc-horse-breeding`. It should own lineage and pregnancy tables, use
 core exports for parent ownership and availability, and request foal creation through a
 dedicated core export rather than inserting directly into `bcc_player_horses`.
+
+All thirteen original tack categories share the existing PieceSlots policy and catalog. needsSaddle marks independent saddle-dependent horse assignments; requiresSaddle marks anchored horn/stirrup assembly parts. Equipment discovery now reads every non-assembly PieceOrder category. No new provider contracts or database tables.

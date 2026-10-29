@@ -64,7 +64,10 @@ Config = {
     },
 
     tack = {
-        enabled = false, -- Install database/feather_tack.sql and trust Inventory unique grants first.
+        enabled = false, -- Install database/feather_tack.sql and configure Inventory collections.
+        resaleEnabled = false, -- Enable after scoped Economy payout authorization is configured.
+        resalePercent = 50, -- Original paid price, reduced by current piece condition.
+        tradingEnabled = false, -- Free/paid nearby trades; install feather_tack.sql and Economy scopes first.
     },
 
     feeding = {

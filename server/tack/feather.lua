@@ -115,12 +115,14 @@ local function equipment(character)
     local owned,parents={},{ }
     for slot,id in pairs(raw) do
         if slot=='tack_saddle_'..tostring(id) and integer(id,1) then owned[id]={slot='saddle',equipmentSlot=slot} end
-        for _,category in ipairs({'saddle','saddlecloth'}) do
-            local prefix=Tack.PieceSlots[category].prefix
-            local horse=type(slot)=='string' and slot:sub(#prefix+1)
-            if type(slot)=='string' and slot:sub(1,#prefix)==prefix and F.IsUuid(horse) and integer(id,1) then
-                owned[id]={horseId=horse,slot=category,equipmentSlot=slot}
-                if category=='saddle' then parents[id]=horse end
+        for _,category in ipairs(Tack.PieceOrder) do
+            if not Tack.AssemblyPrefixes[category] then
+                local prefix=Tack.PieceSlots[category].prefix
+                local horse=type(slot)=='string' and slot:sub(#prefix+1)
+                if type(slot)=='string' and slot:sub(1,#prefix)==prefix and F.IsUuid(horse) and integer(id,1) then
+                    owned[id]={horseId=horse,slot=category,equipmentSlot=slot}
+                    if category=='saddle' then parents[id]=horse end
+                end
             end
         end
     end
@@ -179,7 +181,9 @@ function T.Start()
     end
     -- Fail startup before enabling calls if the optional installation is absent.
     DB.query('SELECT operation_id,character_id,state,record_json,payment_transaction_id,instance_id FROM fs_tack_orders LIMIT 0')
-    local function guard(item)
+    local function guard(item,context)
+        if permits[item.id]=='trade' and context and context.reason=='collection_transfer' and context.resource==GetCurrentResourceName() then return true end
+        if permits[item.id]=='sale' and context and context.reason=='collection_retirement' and context.resource==GetCurrentResourceName() then return true end
         if item.definition and itemPolicy(item.definition.name) then
             local snapshot=item.equipmentSnapshot
             if not ready or held[item.id] or pendingHolds[item.id] or not snapshot or snapshot.equipped~=false then
@@ -197,13 +201,22 @@ function T.Start()
         if held[id] or pendingHolds[id] then return false,'Unequip this tack before changing it.' end
         return true
     end);if not registered.ok then return registered end
+    if Stables.TackResale then local sales=Stables.TackResale.Start();if not sales.ok then return sales end end
+    if Stables.TackTrade then local trades=Stables.TackTrade.Start();if not trades.ok then return trades end end
     ready=true;return F.Ok(true)
 end
 function T.Shop(session,horseId)
     if not T.Enabled() then return F.Ok({available=false,owned={},loadout={}}) end
     if not ready then return bad('inventory_unavailable') end
-    local owned=R.ReadOwned(session,horseId);if not owned.ok then return owned end
-    if owned.value.availability~='stored' then return bad('horse_busy') end
+    if horseId~=nil then
+        if not F.IsUuid(horseId) then return bad('invalid_input') end
+        local owned=R.ReadOwned(session,horseId);if not owned.ok then return owned end
+        if owned.value.availability~='stored' then return bad('horse_busy') end
+    else
+        -- Collection-only customers still need the ordinary character admission
+        -- row for purchases/resale. This does not create/select a horse.
+        DB.exec('INSERT IGNORE INTO fs_character_stables(character_id) VALUES(?)',session.characterId)
+    end
     local inv=collection(session.characterId,true);if not inv.ok then return inv end
     local listed=provider(api.Inventory.GetInventoryItems,inv.value.id);if not listed.ok then return listed end
     local ids,params,byId={},{},{}
@@ -211,10 +224,10 @@ function T.Shop(session,horseId)
         ids[#ids+1]='?';params[#params+1]=tonumber(i.id);byId[tonumber(i.id)]=i
     end end
     if #ids>500 then return bad('tack_limit') end
-    local result={available=true,storage='stable',purchases=Stables.Checkout.Enabled(),owned={},loadout={},conditionMaximum=conditionMax}
+    local result={available=true,storage='stable',trades=Stables.TackTrade and Stables.TackTrade.Enabled() or false,resale=Stables.TackResale and Stables.TackResale.Enabled() or false,purchases=Stables.Checkout.Enabled(),owned={},loadout={},conditionMaximum=conditionMax}
     local assignments=equipment(session.characterId);if not assignments.ok then return assignments end
     local equipped=assignments.value
-    for id,assignment in pairs(equipped) do if assignment.horseId==horseId then result.loadout[assignment.slot]=id end end
+    for id,assignment in pairs(equipped) do if horseId and assignment.horseId==horseId then result.loadout[assignment.slot]=id end end
     if #ids>0 then
         local rows=DB.query("SELECT operation_id,instance_id,record_json FROM fs_tack_orders WHERE state='fulfilled' AND instance_id IN ("..table.concat(ids,',')..')',table.unpack(params))
         for _,row in ipairs(rows) do
@@ -249,20 +262,81 @@ function T.Loadout(session,horseId)
         if q.value.terms.slot~=assignment.slot then return bad('tack_item_unavailable') end
         result[assignment.slot]={catalogId=q.value.terms.catalogId,instanceId=id,condition=item.value.metadata[conditionKey]}
     end end
-    for slot in pairs(result) do if Tack.PieceSlots[slot].requiresSaddle and not result.saddle then return bad('tack_saddle_required') end end
+    for slot in pairs(result) do if (Tack.PieceSlots[slot].requiresSaddle or Tack.PieceSlots[slot].needsSaddle) and not result.saddle then return bad('tack_saddle_required') end end
     return F.IsCurrent(session) and F.Ok(result) or bad('session_stale')
+end
+-- Internal sale adapter: retain one ownership/condition validator for both
+-- fitting and resale. A parked saddle includes all anchored components.
+function T.CheckSaleProvider()
+    local result=inventory('RetireCharacterCollectionItemsOnce',{collectionKey=collectionKey})
+    return not result.ok and result.code=='invalid_input' and F.Ok(true) or bad('tack_sale_inventory_unavailable')
+end
+function T.SaleSnapshot(session,instanceId)
+    if not ready or not T.Enabled() then return bad('tack_disabled') end
+    local custody=collection(session.characterId,true);if not custody.ok then return custody end
+    local assignments=equipment(session.characterId);if not assignments.ok then return assignments end
+    local selected=assignments.value[instanceId]
+    if selected and (selected.horseId or selected.saddleId) then return bad('tack_sale_fitted') end
+    local ids={instanceId}
+    for id,a in pairs(assignments.value) do if a.saddleId==instanceId then ids[#ids+1]=id end end
+    table.sort(ids)
+    local result={items={},equipment={}}
+    for _,prefix in pairs(Tack.AssemblyPrefixes) do result.equipment[prefix..instanceId]=0 end
+    for _,id in ipairs(ids) do
+        local read=collectionItem(session.characterId,id);if not read.ok then return read end
+        local item=read.value;local q=order(item.metadata and item.metadata.stablesTackOrder)
+        if not q.ok or not piece(item,q.value) then return bad('tack_item_unavailable') end
+        if #ids>1 and id==instanceId and q.value.terms.slot~='saddle' then return bad('tack_conflict') end
+        local a=assignments.value[id]
+        if a and a.horseId then return bad('tack_sale_fitted') end
+        if a then result.equipment[a.equipmentSlot]=id end
+        local origin=q.value.terms
+        result.items[#result.items+1]={instanceId=id,revision=item.revision,catalogId=origin.catalogId,
+            condition=item.metadata[conditionKey],maximum=conditionMax,currency=origin.currency,paid=origin.amount}
+    end
+    return F.Ok(result)
+end
+function T.CheckTradeProvider()
+    local result=inventory('TransferCharacterCollectionItemsOnce',{collectionKey=collectionKey})
+    return not result.ok and result.code=='invalid_input' and F.Ok(true) or bad('tack_trade_inventory_unavailable')
+end
+function T.TransferTrade(q)
+    if working[q.seller.characterId] or working[q.buyer.characterId] then return bad() end
+    working[q.seller.characterId]=true;working[q.buyer.characterId]=true
+    for _,item in ipairs(q.items) do permits[item.instanceId]='trade';pendingHolds[item.instanceId]=q.seller.characterId end
+    local result=inventory('TransferCharacterCollectionItemsOnce',{operationId='stables.tack.trade:'..q.id,
+        characterId=q.seller.characterId,recipientCharacterId=q.buyer.characterId,collectionKey=collectionKey,items=q.items,equipment=q.equipment})
+    for _,item in ipairs(q.items) do permits[item.instanceId]=nil;pendingHolds[item.instanceId]=nil end
+    working[q.seller.characterId]=nil;working[q.buyer.characterId]=nil
+    -- Refresh both equipment guard caches; ownership remains Inventory's authority.
+    equipment(q.seller.characterId);equipment(q.buyer.characterId)
+    return result
+end
+function T.RetireSale(q)
+    if working[q.characterId] then return bad() end
+    working[q.characterId]=true
+    for _,item in ipairs(q.items) do permits[item.instanceId]='sale';pendingHolds[item.instanceId]=q.characterId end
+    local result=inventory('RetireCharacterCollectionItemsOnce',{operationId='stables.tack.sale:'..q.id,
+        characterId=q.characterId,collectionKey=collectionKey,items=q.items,equipment=q.equipment})
+    for _,item in ipairs(q.items) do permits[item.instanceId]=nil;pendingHolds[item.instanceId]=nil end
+    working[q.characterId]=nil
+    local refreshed=equipment(q.characterId)
+    return refreshed.ok and result or bad()
 end
 function T.Equip(session,p,authorize)
     if not ready or not T.Enabled() then return bad('tack_disabled') end
     local slot=p.slot or 'saddle'
     local policy=Tack.PieceSlots[slot];if not policy then return bad('invalid_input') end
     if not integer(p.instanceId) or not integer(p.expectedInstanceId) or not integer(p.itemRevision)
-        or p.fromHorseId~=nil and not F.IsUuid(p.fromHorseId) or not F.IsUuid(p.horseId) then return bad('invalid_input') end
+        or p.fromHorseId~=nil and not F.IsUuid(p.fromHorseId)
+        or p.horseId~=nil and not F.IsUuid(p.horseId) or p.horseId==nil and p.detach~=true then return bad('invalid_input') end
     if working[session.characterId] then return bad('tack_pending') end
     working[session.characterId]=true
     local ok,result=pcall(function()
-        local owned=R.ReadOwned(session,p.horseId);if not owned.ok then return owned end
-        if owned.value.availability~='stored' then return bad('horse_busy') end
+        if p.horseId then
+            local owned=R.ReadOwned(session,p.horseId);if not owned.ok then return owned end
+            if owned.value.availability~='stored' then return bad('horse_busy') end
+        end
         if p.fromHorseId and p.fromHorseId~=p.horseId then
             local source=R.ReadOwned(session,p.fromHorseId);if not source.ok then return source end
             if source.value.availability~='stored' then return bad('horse_busy') end
@@ -271,23 +345,35 @@ function T.Equip(session,p,authorize)
         local assignments=equipment(session.characterId);if not assignments.ok then return assignments end
         local current,source=0,nil
         local hasSaddle=false;local targetSaddle
-        local targetSlot=policy.prefix..p.horseId
+        local targetSlot=p.horseId and policy.prefix..p.horseId
         for id,assignment in pairs(assignments.value) do
-            if assignment.horseId==p.horseId and assignment.slot==slot then current=id end
-            if assignment.horseId==p.horseId and assignment.slot=='saddle' then hasSaddle=true;targetSaddle=id end
+            if p.horseId and assignment.horseId==p.horseId and assignment.slot==slot then current=id end
+            if p.horseId and assignment.horseId==p.horseId and assignment.slot=='saddle' then hasSaddle=true;targetSaddle=id end
             if id==p.instanceId then
                 if assignment.slot~=slot then return bad('tack_conflict') end
                 if policy.requiresSaddle and assignment.saddleId~=p.fromSaddleId then return bad('tack_conflict') end
                 source=assignment.horseId
             end
         end
+        -- Independent saddle-mounted pieces stay with their horse, not its assembly.
+        if slot=='saddle' then
+            for _,assignment in pairs(assignments.value) do
+                local dependent=Tack.PieceSlots[assignment.slot]
+                if dependent and dependent.needsSaddle and
+                    (assignment.horseId==p.horseId and p.instanceId==0
+                    or source and source~=p.horseId and assignment.horseId==source) then
+                    return bad('tack_dependents_equipped')
+                end
+            end
+        end
         local desired=p.instanceId
         if p.detach then
             local attachment=assignments.value[p.instanceId]
-            if not policy.requiresSaddle or not attachment or not attachment.saddleId then return bad('tack_conflict') end
+            if not policy.requiresSaddle or not attachment or not attachment.saddleId
+                or not p.horseId and attachment.horseId then return bad('tack_conflict') end
             targetSlot=attachment.equipmentSlot;current=p.instanceId;desired=0
         end
-        if policy.requiresSaddle and not p.detach and not hasSaddle then return bad('tack_saddle_required') end
+        if (policy.requiresSaddle or policy.needsSaddle) and not p.detach and not hasSaddle then return bad('tack_saddle_required') end
         if policy.requiresSaddle and not p.detach then targetSlot=Tack.AssemblyPrefixes[slot]..targetSaddle end
         if current~=p.expectedInstanceId and current~=p.instanceId then return bad('tack_conflict') end
         if source~=p.fromHorseId and source~=p.horseId then return bad('tack_conflict') end
@@ -316,7 +402,7 @@ function T.Equip(session,p,authorize)
                 or tx.one("SELECT operation_id FROM fs_care_operations WHERE character_id=? AND state NOT IN ('applied','cancelled') LIMIT 1 FOR UPDATE",session.characterId) then
                 outcome=bad('horse_busy');return false
             end
-            for _,id in ipairs({p.horseId,p.fromHorseId}) do
+            for _,id in pairs({p.horseId,p.fromHorseId}) do
                 local h=tx.one('SELECT owner_character_id,availability,biological_state FROM fs_horses WHERE horse_id=? FOR UPDATE',id)
                 if not h or h.owner_character_id~=session.characterId or h.availability~='stored' or h.biological_state~='alive' then outcome=bad('horse_busy');return false end
             end
@@ -328,6 +414,11 @@ function T.Equip(session,p,authorize)
             local selected=assignments.value[p.instanceId]
             if desired>0 and selected and selected.equipmentSlot~=targetSlot then change(selected.equipmentSlot,p.instanceId,0) end
             change(targetSlot,current,desired)
+            -- A component fit also fences its parent assignment/item. It cannot
+            -- attach to a saddle moved or surrendered after the menu snapshot.
+            if policy.requiresSaddle and not p.detach then
+                change(Tack.PieceSlots.saddle.prefix..p.horseId,targetSaddle,targetSaddle)
+            end
             if slot=='saddle' and current>0 and current~=desired then
                 change('tack_saddle_'..current,0,current)
             end
@@ -433,6 +524,8 @@ function T.Confirm(session,site,p,authorize)
     pending=true;return T.Resume(q.id,q.characterId)
 end
 function T.Tick()
+    if ready and Stables.TackTrade then Stables.TackTrade.Tick() end
+    if ready and Stables.TackResale then Stables.TackResale.Tick() end
     if not ready or not pending then return end
     pending=false
     local ok,rows=pcall(DB.query,"SELECT operation_id,character_id FROM fs_tack_orders WHERE state IN ('payment_pending','paid') ORDER BY updated_at,operation_id LIMIT 5")
@@ -446,7 +539,7 @@ end
 function T.Status()
     if not T.Enabled() then return {enabled=false,ready=false,pending={}} end
     local ok,rows=pcall(DB.query,"SELECT operation_id,character_id,state FROM fs_tack_orders WHERE state IN ('payment_pending','paid') ORDER BY updated_at,operation_id LIMIT 10")
-    return {enabled=true,ready=ready,storage='stable_collection',recoveryAvailable=ok,pending=ok and rows or nil}
+    return {enabled=true,ready=ready,storage='stable_collection',trades=Stables.TackTrade and Stables.TackTrade.Status() or nil,resale=Stables.TackResale and Stables.TackResale.Status() or nil,recoveryAvailable=ok,pending=ok and rows or nil}
 end
 AddEventHandler('onResourceStop',function(resource)
     if resource=='feather-inventory' then ready=false end

@@ -27,6 +27,48 @@ local function current(source,p)
     if not route.ok or not route.value or route.value.routeId~=s.route then return nil end
     return s
 end
+-- Both menus are admitted from public bucket zero, then privately routed.
+-- Validate those live routes separately rather than comparing preview buckets.
+function M.TradePair(s,source)
+    local other=sessions[source]
+    if not other or other==s or other.site~=s.site or s.session.characterId==other.session.characterId
+        or current(s.session.source,{token=s.token})~=s or current(source,{token=other.token})~=other then return nil end
+    local a,b=GetPlayerPed(s.session.source),GetPlayerPed(source)
+    -- RedM's server sync tree does not expose ped health: GetEntityHealth
+    -- returns zero even for live players. Client menu lifecycle closes on death;
+    -- server admission retains current sessions, exact routes and proximity.
+    if a==0 or b==0 or not DoesEntityExist(a) or not DoesEntityExist(b) then return nil end
+    local x,y=GetEntityCoords(a),GetEntityCoords(b)
+    if (x.x-y.x)^2+(x.y-y.y)^2+(x.z-y.z)^2>25 then return nil end
+    return other
+end
+function M.CharacterName(characterId)
+    local provider=F.Call('feather-core','GetProvider','character-profile',nil,1)
+    local impl=provider.ok and type(provider.value)=='table' and provider.value.implementation
+    local getProfile=type(impl)=='table' and impl.GetProfile
+    local callable=type(getProfile)=='function' or type(getProfile)=='table'
+        and type(rawget(getProfile,'__cfx_functionReference'))=='string'
+    if not callable then return nil end
+    local ok,result=pcall(getProfile,characterId)
+    local profile=ok and type(result)=='table' and result.ok and result.value
+    if type(profile)=='table' and type(profile.firstName)=='string' then
+        return (profile.firstName..' '..(type(profile.lastName)=='string' and profile.lastName or '')):match('^%s*(.-)%s*$')
+    end
+end
+function M.TradePlayers(s)
+    local players={}
+    for source in pairs(sessions) do
+        local other=M.TradePair(s,source)
+        if other then
+            local name=M.CharacterName(other.session.characterId)
+            -- Profile reads may yield; never publish a replaced character session.
+            if M.TradePair(s,source)==other then players[#players+1]={source=source,name=name} end
+        end
+    end
+    table.sort(players,function(a,b) return a.source<b.source end)
+    return players
+end
+
 local function roster(s,cursor)
     if cursor~=nil and not F.IsUuid(cursor) then return F.Error('invalid_input','Invalid roster cursor.') end
     local listed=F.Call('feather-assets','ListAssetsByHolder',{
@@ -114,6 +156,9 @@ function M.Request(source,p,action)
     if s.busy then return F.Error('busy','A stable action is finishing.') end
     s.busy=true
     local ok,result=pcall(function()
+        if action=='tack_trade_list' then return Stables.TackTrade.List(s) end
+        if action=='tack_trade_offer' then return Stables.TackTrade.Offer(s,p) end
+        if action=='tack_trade_respond' then return Stables.TackTrade.Respond(s,p) end
         if action=='roster' then return roster(s,p.cursor) end
         if action=='rename' then
             local renamed=R.RenameOwned(s.session,p.horseId,p.revision,p.name)
@@ -122,6 +167,8 @@ function M.Request(source,p,action)
         end
         if action=='purchase_quote' then return Stables.Checkout.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='purchase_confirm' then return Stables.Checkout.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
+        if action=='tack_sale_quote' then return Stables.TackResale.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
+        if action=='tack_sale_confirm' then return Stables.TackResale.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='tack_quote' then return Stables.Tack.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='tack_confirm' then return Stables.Tack.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='tack_equip' then return Stables.Tack.Equip(s.session,p,function() return current(source,p)==s end) end
@@ -162,24 +209,35 @@ function M.Tick()
 end
 function M.Install()
     for _,action in ipairs({'open','roster','preview','select','close','ping','rename','purchase_quote','purchase_confirm',
-        'tack_shop','tack_quote','tack_confirm','tack_equip'}) do
+        'tack_trade_list','tack_trade_offer','tack_trade_respond','tack_shop','tack_quote','tack_confirm','tack_equip','tack_sale_quote','tack_sale_confirm'}) do
         local result=F.Call('feather-core','RegisterRpc','stables.horses.call.menu_'..action..'.v1',function(p,source)
             return action=='open' and M.Open(source,p) or M.Request(source,p,action)
         end,{contract=1,direction='client_to_server',requireCharacter=true,windowMs=2000,maxCalls=4,
             maxPayloadBytes=(action=='rename' or action=='purchase_quote') and 2048 or 512,maxDepth=2,maxNodes=12,validatePayload=function(p)
                 if type(p)~='table' then return false end
                 local allowed={token=true,site=true,horseId=true,revision=true,cursor=true}
+                if action=='tack_trade_offer' then allowed.instanceId=true;allowed.recipientSource=true;allowed.amount=true;allowed.currency=true end
+                if action=='tack_trade_respond' then allowed.operationId=true;allowed.accept=true;allowed.amount=true;allowed.currency=true end
                 if action=='rename' then allowed.name=true end
                 if action=='purchase_quote' then allowed.modelKey=true;allowed.name=true;allowed.gender=true;allowed.currency=true end
                 if action=='purchase_confirm' then allowed.operationId=true;allowed.amount=true;allowed.currency=true end
+                if action=='tack_sale_quote' then allowed.instanceId=true end
+                if action=='tack_sale_confirm' then allowed.operationId=true;allowed.dollars=true;allowed.gold=true end
                 if action=='tack_quote' then allowed.catalogId=true;allowed.currency=true end
                 if action=='tack_confirm' then allowed.operationId=true;allowed.amount=true;allowed.currency=true end
                 if action=='tack_equip' then allowed.instanceId=true;allowed.expectedInstanceId=true;allowed.itemRevision=true;allowed.fromHorseId=true;allowed.slot=true;allowed.detach=true;allowed.fromSaddleId=true end
                 for key in pairs(p) do if not allowed[key] then return false end end
-                if action=='tack_shop' then return F.IsUuid(p.token) and F.IsUuid(p.horseId) end
+                if action=='tack_trade_offer' then return F.IsUuid(p.token) and F.IsRevision(p.instanceId) and p.instanceId>0
+                    and F.IsRevision(p.recipientSource) and p.recipientSource>0 and F.IsRevision(p.amount) and p.amount<=1000000000
+                    and (p.currency=='dollars' or p.currency=='gold') end
+                if action=='tack_trade_respond' then return F.IsUuid(p.token) and F.IsUuid(p.operationId) and type(p.accept)=='boolean'
+                    and F.IsRevision(p.amount) and (p.currency=='dollars' or p.currency=='gold') end
+                if action=='tack_shop' then return F.IsUuid(p.token) and (p.horseId==nil or F.IsUuid(p.horseId)) end
+                if action=='tack_sale_quote' then return F.IsUuid(p.token) and F.IsRevision(p.instanceId) and p.instanceId>0 end
+                if action=='tack_sale_confirm' then return F.IsUuid(p.token) and F.IsUuid(p.operationId) and F.IsRevision(p.dollars) and F.IsRevision(p.gold) end
                 if action=='tack_quote' then return F.IsUuid(p.token) and type(p.catalogId)=='string' and #p.catalogId<=64 and (p.currency=='dollars' or p.currency=='gold') end
                 if action=='tack_confirm' then return F.IsUuid(p.token) and F.IsUuid(p.operationId) and F.IsRevision(p.amount) and (p.currency=='dollars' or p.currency=='gold') end
-                if action=='tack_equip' then return (p.detach==nil or type(p.detach)=='boolean') and (p.fromSaddleId==nil or F.IsRevision(p.fromSaddleId) and p.fromSaddleId>0) and F.IsUuid(p.token) and F.IsUuid(p.horseId) and F.IsRevision(p.instanceId)
+                if action=='tack_equip' then return (p.detach==nil or type(p.detach)=='boolean') and (p.fromSaddleId==nil or F.IsRevision(p.fromSaddleId) and p.fromSaddleId>0) and F.IsUuid(p.token) and (F.IsUuid(p.horseId) or p.horseId==nil and p.detach==true) and F.IsRevision(p.instanceId)
                     and (p.slot==nil or type(p.slot)=='string' and Tack.PieceSlots[p.slot]~=nil)
                     and F.IsRevision(p.expectedInstanceId) and F.IsRevision(p.itemRevision) and (p.fromHorseId==nil or F.IsUuid(p.fromHorseId)) end
                 if action=='purchase_quote' then return F.IsUuid(p.token) and type(p.modelKey)=='string' and #p.modelKey<=64

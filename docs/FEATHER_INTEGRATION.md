@@ -1,5 +1,399 @@
 # Feather integration progress
 
+## Three-minute player trade coordination window and paid assembly acceptance - 2026-10-28
+
+Maintainer confirms quoted payment moved once and the saddle, fitted horn and
+stirrups arrived together. Accept the controlled paid saddle-assembly transfer at
+that reported level; no numeric price, currency or piece IDs were supplied. This
+is not live injected-fault/concurrency evidence. Prior no-horse recipient piece190
+visibility and display cloth correction were confirmed separately.
+
+Player-to-player tack draft/offer expiry and matching character exclusivity window
+are now180 seconds (previously60), measured from initial trade review creation.
+UI says three minutes. NPC purchase/resale quotes and menu heartbeats are unchanged;
+accepted settlement recovery remains independent of offer expiry.20 trade/server
+and trade/menu tests pass, including acceptance after120 seconds and refusal after
+181 seconds with no debit/item movement. Live longer-window check pending.
+
+Required runtime copies:
+- C:/coding/bcc-feather-scripts/bcc-stables/server/tack/trade.lua -> bcc-stables/server/tack/trade.lua
+- C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua -> bcc-stables/client/core/locale.lua
+
+Close stable menus, copy both files, then server console `restart bcc-stables`.
+No refresh,SQL,config/provider/full-server restart or docs/tests server copy needed.
+New reviews/offers use180 seconds; existing saved offers retain their original
+expiry. No need to repeat the paid assembly test. If checking the longer window,
+send a free offer through the stable UI, coordinate for about two minutes, then
+recipient Tack Trades -> Refresh -> Accept. No F8 command required.
+
+## Display saddle only for dependent categories - 2026-10-28
+
+Maintainer confirms saddlecloth reached player2 (no horses); screenshot shows
+Saddlecloth12,Piece190,condition100/100 in My Saddlecloths on the labelled display
+horse. Recipient collection visibility accepted at reported level. Display saddle
+obscured cloth; changed fallback to use existing requiresSaddle policy, adding a
+visual saddle only for stirrups/horns. Switching back to saddlecloths clears the
+visual saddle and its default horn/stirrups through existing preview loadout
+restoration. No ownership/equipment/purchase changes.61 menu tests pass, including
+horn->cloth->stirrups->cloth clearing; live visual correction pending.
+
+Copy C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua to resource-relative
+bcc-stables/client/ui/stable.lua. Close stable menus, copy, then server console
+`restart bcc-stables`. No refresh,SQL,config,provider restart or docs/tests copy.
+Reopen Horse Tack on player2: select the owned saddlecloth and verify no covering
+saddle; stirrups/horns should retain the visual saddle. No F8 command required.
+
+## Collection access without an owned horse ready for testing - 2026-10-28
+
+Maintainer reports the first free transfer appeared to work and the item left the
+sender's tack. Recipient owns0 horses and could not inspect the received piece;
+recipient item/condition acceptance is still pending. Do not treat that as full
+free/paid trade acceptance. Approved direction: character collection access
+independent of horse ownership, temporary preview fallback, starter grants separate.
+
+Tack.Shop now permits an omitted horseId to read the current character's private
+tack collection, with no owned-horse lookup or inferred loadout from parked items.
+It initializes only the ordinary fs_character_stables admission row as needed;
+no fs_horses row, asset, horse selection or starter grant is created. Explicit
+horse IDs still require current ownership and stored eligibility. Existing
+inventory custody/provenance checks and sale/trade consent remain authoritative.
+
+When no horse is selected, Horse Tack displays a local non-networked Morgan Bay
+through the existing preview lifecycle, labelled Display Horse / Preview Only.
+It stays solid for tack inspection; transparency was discussed but not requested.
+The local display identity is never sent as an owned horse UUID. Changing tack
+styles is visual only. Loose saddlecloth/horn/stirrups get a visual default saddle
+for inspection; this neither grants nor equips a saddle. Equip actions are hidden
+for the display horse. Collection purchases (when enabled), sales and player trades
+remain available. Parked horn/stirrups may be detached through the existing
+revision/ownership/character-admission/Inventory-CAS path without a horse; omitted
+horse IDs cannot equip or detach from an actual horse. Existing owned-horse tack
+behavior remains intact. No new runtime command, config setting or polling loop.
+
+325 Stables tests pass, including no-owned-horse collection access/empty loadout,
+explicit foreign/fake horse refusal, no-horse parked part detach, real-horse detach
+refusal, display preview/received item/refresh/locale/close and visual-only default
+saddle. Existing local preview tests assert non-networked creation and cleanup.
+Live recipient inspection/preview remains pending.
+
+Required runtime copies; destinations are relative to the resource folder:
+
+| Absolute local source | Destination |
+| --- | --- |
+| C:/coding/bcc-feather-scripts/bcc-stables/server/tack/feather.lua | bcc-stables/server/tack/feather.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/server/ui/stable.lua | bcc-stables/server/ui/stable.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua | bcc-stables/client/ui/stable.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua | bcc-stables/client/core/locale.lua |
+
+Close both stable menus, copy those four files, then server console:
+
+```text
+restart bcc-stables
+```
+
+No refresh (manifest unchanged), SQL import, config edit, provider restart or
+full-server restart. Docs/tests are optional local development files; no server
+copy needed. Player2 with0 horses: open the stable normally, select Horse Tack ->
+My category. Verify the transferred item's exact piece ID/condition and select it
+to inspect on the labelled display horse. Verify there is no equip/take-out action
+for that horse, My Horses remains empty, and switching tabs/closing restores the
+normal camera/radar/input. No F8 commands or new transfer needed for this first
+read-only check. Do not grant a starter horse to work around collection access.
+
+## RedM trade discovery correction - 2026-10-28
+
+Maintainer reports both players had the same stable open and were close together;
+recipient owns no horses. The attached positioning screenshot is consistent with
+being within the existing five-metre trade radius. Found a deterministic code bug:
+TradePair required GetEntityHealth>0 on the server. Cfx's RedM sync tree returns
+nullptr from GetPedHealth; the server GET_ENTITY_HEALTH handler therefore returns
+zero for live players too. Removed that unsupported native check, retaining exact
+current character/menu/route attestation, existing peds and server distance checks.
+Client menu lifecycle continues to close on local death/ped change. This does not
+claim a new authoritative server medical-state integration. Prior health-positive
+mock evidence did not model RedM correctly; corrected fixture returns zero.
+
+Also corrected trade Refresh: retain selected piece, entered price/currency and
+valid recipient, replacing the recipient choice if it disappears. Previously
+Refresh discarded the offer form. Clarified the empty-recipient message: menu
+admission radius is12m but trade distance remains5m. No bucket equality or horse
+ownership requirement was introduced.319 Stables tests pass, including server
+health0 with separate routes/empty rosters, missing-ped/distance/route refusal and
+refreshing a newly available recipient without losing the selected piece.
+Live discovery/free/paid trade checks remain pending.
+
+Required runtime copies (resource-relative destinations):
+
+| Absolute local source | Destination |
+| --- | --- |
+| C:/coding/bcc-feather-scripts/bcc-stables/server/ui/stable.lua | bcc-stables/server/ui/stable.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua | bcc-stables/client/ui/stable.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua | bcc-stables/client/core/locale.lua |
+
+Close both stable menus, copy those files, then server console:
+
+```text
+restart bcc-stables
+```
+
+No refresh, SQL, config change, provider restart or full-server restart is required
+for this correction. Docs/tests are optional local development files, not required
+server copies. Reopen the same stable from the shown nearby positions. Sender:
+Horse Tack -> My category -> select an unequipped piece -> Review Player Trade;
+verify the recipient ID appears. If recipient opens later, Refresh preserves the
+piece and refreshes players. First retry the free handover: price0 -> Review ->
+Send Offer. Recipient: Tack Trades -> Refresh -> review -> Accept Trade. Verify
+same piece ID/condition moves and wallets do not change. No F8 trade command.
+
+Upstream source checked:
+https://github.com/citizenfx/fivem/blob/master/code/components/citizen-server-impl/include/state/SyncTrees_RDR3.h#L1334
+https://github.com/citizenfx/fivem/blob/master/code/components/citizen-server-impl/src/state/ServerGameState_Scripting.cpp#L802
+
+## Free and paid nearby-player tack trades ready for testing - 2026-10-28
+
+Implemented behind Config.tack.tradingEnabled=false by default. Both characters
+open the same stable within five metres, each retaining their independently
+validated preview route. Seller reviews exact piece IDs/condition/assembly and
+price, then sends an immutable 60-second offer; recipient reviews the same terms
+and accepts or cancels. Price zero is a free handover with no Economy calls.
+Paid offers use an idempotent buyer-wallet-to-sink payment, exact Inventory custody
+transfer and scoped seller Issue payout. This is a recoverable multi-provider
+settlement, not a globally atomic escrow transaction. Certain Inventory refusals
+refund the exact debit once; unknown replies retain the intent and replay its
+receipt. Once accepted, recovery finishes independently of player presence.
+
+Inventory TransferCharacterCollectionItemsOnce preserves IDs, metadata, condition
+and parked saddle anchors, increments custody revisions once and atomically checks
+recipient capacity, exact source revisions/equipment, destination anchors and
+movement/change guards. No retirement/regrant or purchase-provenance rewrite.
+Saddlecloths remain separate. Received pieces remain valid for fitting and resale.
+No new runtime proof commands. Draft/offered terms expire and cannot be accepted
+from another menu/session. Closing menus before acceptance prevents acceptance;
+existing offers can be cancelled from Tack Trades. Recipients refresh that tab to
+see offers; it is available without owning a horse. Trade/pending status appears
+under BccStablesStatus -> tack.trades.
+
+Offline evidence:317 Stables tests,30 Inventory transaction tests, full existing
+Inventory Lua suite and Economy Lua suite (10 reversal scenarios plus issue
+preflight) pass. Tests cover both consent stages, free/paid/replay, insufficient
+funds, price/item changes, distinct private routes, proximity/death/route refusal,
+no-horse recipient UI, locale fallback, lost debit/transfer/payout/refund replies,
+restart recovery and original provenance. Live CFX/MariaDB/UI/concurrency testing
+is pending; existing storage/resale acceptance remains unchanged.
+
+### Required deployment (server root unknown; destinations below are resource-relative)
+
+Close both stable/inventory menus and store any active horses first. On each player
+with an active horse, run player F8 `BccStablesHorseStore` and verify disappearance.
+Then run server console `stop bcc-stables` before copying/restarting providers.
+
+Required runtime copies:
+
+| Absolute local source | Destination |
+| --- | --- |
+| C:/coding/bcc-feather-scripts/bcc-stables/fxmanifest.lua | bcc-stables/fxmanifest.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua | bcc-stables/client/core/locale.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua | bcc-stables/client/ui/stable.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/server/ui/stable.lua | bcc-stables/server/ui/stable.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/server/tack/feather.lua | bcc-stables/server/tack/feather.lua |
+| C:/coding/bcc-feather-scripts/bcc-stables/server/tack/trade.lua | bcc-stables/server/tack/trade.lua (new) |
+| C:/coding/feather-scripts/feather-inventory/server/services/api.lua | feather-inventory/server/services/api.lua |
+| C:/coding/feather-scripts/feather-inventory/server/services/character_collections.lua | feather-inventory/server/services/character_collections.lua |
+
+Required config/database changes, separately from runtime copies:
+
+- C:/coding/bcc-feather-scripts/bcc-stables/config/settings.lua -> bcc-stables/config/settings.lua:
+  merge `tradingEnabled = true` into the existing Config.tack table; retain its
+  existing enabled/resale settings and all other server configuration.
+- C:/coding/feather-scripts/feather-economy/config.lua -> feather-economy/config.lua:
+  merge `['stables.tack_trade_sale'] = true` into existing IssueReasons['bcc-stables'];
+  merge `['stables.tack_trade_payment'] = { referenceType = 'stables_tack_trade', reversalReason = 'stables.tack_trade_refund' }`
+  into existing ReversiblePayments['bcc-stables']. Retain prior scopes and the
+  existing scoped Admin/Core issue grant used by resale; no new Admin deployment.
+- In the database administration application, execute
+  C:/coding/bcc-feather-scripts/bcc-stables/database/feather_tack.sql against the
+  existing Feather database. It is idempotent and adds fs_tack_trades without
+  changing the schema-11 ledger. Optional archive copy: bcc-stables/database/feather_tack.sql.
+  Inventory creates inventory_collection_transfers on startup; no Inventory SQL
+  import or trust-policy change is needed for the already-configured collection.
+
+After copy/config/SQL, server console in order:
+
+```text
+refresh
+restart feather-inventory
+restart feather-economy
+ensure bcc-stables
+BccStablesStatus
+```
+
+Refresh is required because the Stables manifest adds server/tack/trade.lua.
+No full-server restart. Do not copy tests, .git or development fixtures. Docs are
+optional server copies; no other runtime changes are required for this test gate.
+
+### Live test gate (native stable UI, two players)
+
+1. Both open the same stable within five metres of each other. Sender selects an
+   unequipped piece in Horse Tack -> My category -> Review Player Trade. Select
+   the recipient's current server ID, price 0, then Review. Verify IDs/condition
+   and price in the review/confirmation before Send Offer.
+2. Recipient opens Tack Trades -> Refresh. Verify the exact items and Free price,
+   then Accept Trade. Verify sender loses them, recipient owns those same IDs and
+   condition, and neither wallet changes. A recipient with no horses can use this tab.
+3. Repeat with a parked saddle carrying fitted horn/stirrups and a small paid
+   cash price. Verify exact bundle/price before both confirmations; buyer debit
+   and seller credit equal the price once, saddlecloth stays with sender. Recipient
+   equips the saddle on their own stored horse and verifies fitted parts travel.
+4. Send another offer and cancel/decline before acceptance. Verify no item/fund
+   change. Refresh/reopen both menus after completed trades: no duplicate pieces
+   or payments. Gold is available using the same currency selector if desired.
+5. Finish by closing both menus. If a horse was taken out during checking, run
+   player F8 `BccStablesHorseStore` and confirm disappearance.
+
+No new F8 trade commands, item grants or resource restarts are needed during these
+UI checks. Stop here and report results before adding further trade features.
+
+## Saddle assembly resale accepted live - 2026-10-28
+
+Maintainer confirms all requested assembly-sale steps worked: review lists saddle,
+fitted horn and stirrups with the correct total; one confirmation removes those
+pieces, preserves the saddlecloth and credits the quoted cash/gold amount. No
+numeric assembly IDs or payout amounts were supplied. Together with the earlier
+recovered saddlecloth sale (+5 dollars), this accepts the controlled single-piece
+and assembly buy-back paths. Injected faults/concurrency remain offline evidence;
+repeat-payment behavior was not separately reported live. No repeated sale or
+deployment is needed. Nearby-player tack trading is next, not implemented.
+
+## Visible sale review item list - 2026-10-28
+
+The review page previously showed only the total; item lines existed only in the
+confirmation dialog. Render each frozen quote item directly above the offer with
+name, piece ID and condition, retaining the same list in the final dialog. Hide the
+general assembly help while a sale quote is open to reduce clutter.59 menu tests
+pass, including a three-piece list before confirmation and no early sale request.
+Only client/ui/stable.lua copy and Stables restart after menu/horse cleanup; no
+refresh, SQL, configuration or provider change. Assembly sale live check pending.
+
+## Component removal menu cleanup - 2026-10-28
+
+Remove the duplicate Unequip action when the selected horn/stirrups are attached
+to the current saddle. Remove from Saddle remains the detach action for fitted or
+parked assemblies. Equip remains available for loose parts or moving a part from
+another saddle onto the current one. Selecting Saddle Default uses the same Remove
+from Saddle label.58 menu tests pass, including current/other-saddle/default paths.
+Only client/ui/stable.lua runtime copy and Stables restart after menu/horse cleanup;
+no refresh, SQL, configuration or provider changes. Assembly sale live gate remains.
+
+## Direct equipped-tack unequip action - 2026-10-28
+
+Live assembly-sale setup exposed a UI gap: a selected fitted saddle showed disabled
+Equip instead of an obvious Unequip action (the former path required selecting
+No Saddle). Equipment button now toggles to category-specific Unequip when the
+selected piece matches that horse's assignment. It submits existing instanceId=0
+contract, retains the same owned piece selection after removal and enables sale.
+Assembly behavior/backend contracts unchanged.57 menu tests pass, including fitted
+button, exact unequip payload and retaining the piece for resale. Live assembly
+sale remains pending. Copy only client/ui/stable.lua to matching server bcc-stables
+path; close menu, store any active horse and await disappearance, restart bcc-stables.
+No refresh, SQL, config or provider restart. Tests/docs remain local.
+
+## Recovered saddlecloth resale accepted live - 2026-10-28
+
+After the transaction lookup fix, maintainer confirms the pending saddlecloth sale
+completed: saddlecloth disappeared and cash increased by5 dollars. This accepts one
+recovered single-piece sale and payout. Item ID, total wallet balances and explicit
+repeat-confirmation observations were not supplied; do not infer them. Assembly
+resale remains a pending live gate. No repeated saddlecloth sale is required.
+
+## Live resale transaction lookup fix - 2026-10-28
+
+Live buy-back repeatedly rolled back before deletion at Inventory character_collections.lua
+because retirement called nonexistent tx:GetItem. Production exposes GetItemForUpdate.
+The offline retirement adapter incorrectly supplied GetItem and masked the mismatch.
+Call corrected; regression now loads the actual production GetItemForUpdate body and
+normalizer/SQL instead of inventing its method. All23 provider tests pass; removal
+adapter remains modeled. Live completion is still pending. Existing Stables sale intent
+must be retained and will resume; no item recreation, new sale, SQL or config change.
+Stop bcc-stables, copy C:/coding/feather-scripts/feather-inventory/server/services/
+character_collections.lua to matching server feather-inventory/server/services path,
+restart feather-inventory, start bcc-stables, then BccStablesStatus. No refresh needed.
+
+## Stable tack buy-back ready for live testing - 2026-10-28
+
+Resale is implemented, not yet live accepted. Config.tack.resaleEnabled defaults
+false; resalePercent defaults50. Offer = floor(original paid minor units * percent *
+condition / (100 * maximum)), separately per original currency. The maintainer confirmed this configurable default:50% of original paid price,
+reduced by condition and paid in the original currency.
+Free/rounded-zero offers refuse. One quote lasts45 seconds, lists all included IDs,
+condition and payout totals, and requires explicit confirmation. Fitted items refuse;
+unequipped saddles include their owned horn/stirrups, while saddlecloths are separate.
+An individual component must be removed from its saddle before selling it alone.
+
+Inventory verifies exact collection owner/purpose, item revisions and the expected
+equipment snapshot (including empty anchors) and atomically removes the selected
+pieces with a durable surrender receipt. Historical replays never remove another
+piece. Stables then issues per-currency payments using fixed Economy keys and checks
+receipts. Lost replies, interrupted removal and partial payments remain recoverable
+through the existing bounded worker; there is no compensating item recreation.
+Stables intent uses optional fs_tack_sales, leaving schema11 ledger unchanged.
+Inventory auto-creates inventory_collection_retirements. CheckIssue is read-only and
+shares actual Issue authorization; wallet/source checks occur before surrender.
+Admin's server-only service scope plus Economy's exact stables.tack_sale reason are
+required; no broad trustedSupplier or player currency grant is added. Other grants,
+carried APIs, care and stable storage retain their contracts. No new proof commands.
+
+297 Stables tests,23 Inventory transaction tests/full Lua suite, Economy journal and
+issue-preflight checks,11 Admin service-policy cases and12 wallet-funding cases pass.
+These are offline tests, not native/CFX/MariaDB concurrency or live-funds acceptance.
+Coverage includes one-time removal/credit, policy and stale quote refusal, fitted
+items, changed assembly anchors, interrupted surrender, lost replies, partial mixed-
+currency payouts, restart, pending-menu refresh and parent fitting races. Player
+trading remains next and is not implemented.
+
+Required runtime copies (absolute local source -> relative server destination):
+
+- `C:/coding/bcc-feather-scripts/bcc-stables/fxmanifest.lua` -> `bcc-stables/fxmanifest.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/tack/feather.lua` -> `bcc-stables/server/tack/feather.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/tack/resale.lua` -> `bcc-stables/server/tack/resale.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/server/ui/stable.lua` -> `bcc-stables/server/ui/stable.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/core/locale.lua` -> `bcc-stables/client/core/locale.lua`
+- `C:/coding/bcc-feather-scripts/bcc-stables/client/ui/stable.lua` -> `bcc-stables/client/ui/stable.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/character_collections.lua` -> `feather-inventory/server/services/character_collections.lua`
+- `C:/coding/feather-scripts/feather-inventory/server/services/api.lua` -> `feather-inventory/server/services/api.lua`
+- `C:/coding/feather-scripts/feather-economy/server/services/api.lua` -> `feather-economy/server/services/api.lua`
+
+Required configuration merges, preserving other server settings:
+- C:/coding/bcc-feather-scripts/bcc-stables/config/settings.lua -> bcc-stables/config/settings.lua:
+  add resaleEnabled=true and resalePercent=50 inside the existing tack block;
+  keep tack enabled and retain existing care/commerce settings.
+- C:/coding/feather-scripts/feather-economy/config.lua -> feather-economy/config.lua:
+  add ['stables.tack_sale']=true to Config.IssueReasons['bcc-stables']; do not add
+  unrestricted trustedSuppliers and do not disable Authorization.
+- C:/coding/feather-scripts/feather-admin/configs/service_policy.lua -> feather-admin/configs/service_policy.lua:
+  add ['bcc-stables']={['economy.currency.issue']=true} under
+  Config.servicePolicy['feather-economy'], preserving existing principals.
+
+In the database client, run the updated
+C:/coding/bcc-feather-scripts/bcc-stables/database/feather_tack.sql against the
+existing Feather database. It creates the optional sale-intent table and preserves
+existing definitions/items. Inventory creates its retirement receipt table on restart.
+No other manual SQL or full server restart is needed. Tests/docs remain local.
+
+Close menus; if a horse is active, player F8 BccStablesHorseStore and wait for
+confirmed disappearance before replacing files. After runtime/config/SQL updates,
+server console in order: refresh; restart feather-admin; restart feather-inventory;
+restart feather-economy; restart bcc-stables; BccStablesStatus.
+Refresh is required for the new Stables manifest entry. Check tack.resale.enabled
+and ready; actual payout authorization is checked when reviewing a sale.
+
+Live gate: record wallet balances and a spare genuine purchased tack piece's ID/
+condition. Review Sale then Cancel: piece/balance unchanged. Confirm sale: one
+piece removal and exact displayed payout; Refresh/reopen must not pay again.
+Then review an unequipped saddle assembly: dialog lists its actual fitted pieces,
+cloth excluded; confirm once and verify only listed pieces removed and payout exact.
+Assigned items must show disabled sale; detach a component for individual sale.
+Stop here for live feedback; no repeated riding/care/whistle tests required.
+
 ## Stable tack storage accepted live - 2026-10-28
 
 Maintainer reports storage all seems to be working. This accepts the requested
@@ -1740,3 +2134,45 @@ rideable, whistle-responsive replacement. Then move over 100m away again and
 repeat with a short whistle. Finish with BccStablesHorseStore in owner F8 and
 confirm disappearance. BccStablesStatus in the server console shows generationId
 and netId for comparison before/after.
+
+Player tack trade selector now shows the server player display name alongside the localized player ID, with ID-only fallback. Names are display-only; recipient authorization still uses the current source/session. Offline menu and client regressions passed; live display verification pending.
+
+Tack trade recipient names now use the current character first/last name through Core character-profile GetProfile (the Admin naming contract), replacing server display names. Missing profiles fall back to the localized player ID; no account/server name is exposed. Session/proximity is rechecked after profile reads. Eleven server menu and seven trade client tests passed; live character-name check pending.
+
+Trade summaries and confirmation dialogs now display both character names alongside player IDs, including immediate completed-trade responses. Names resolve by the recorded character IDs rather than potentially reused server IDs, through the shared profile naming helper. Missing names retain localized ID fallback. Offline: 22 tack trade and 11 server menu tests passed; live summary display pending. No schema/config changes.
+
+## Remaining original tack categories - ready for live testing
+
+Enabled saddlebags, bedrolls, bridles, holsters, horseshoes, masks, manes,
+tails and mustaches alongside the four existing categories. Reused unique
+character-owned pieces, private stable collection, exact purchase receipts,
+per-horse equipment, resale and free/paid player trades. Hair styles follow the
+existing catalog component/item model. No new service, recovery worker or table.
+Saddlebags/bedrolls/holsters require a saddle but remain separate horse assignments;
+remove them before removing or moving their saddle. Horn/stirrup assembly behavior
+is unchanged. Saddlebags do not grant storage capacity; shoes do not add stat bonuses.
+Tail clearing now uses 0xA63CAE10, distinct from saddlecloth 0x17CEB41A; verified
+against https://github.com/femga/rdr3_discoveries/blob/master/clothes/cloth_hash_names.lua.
+
+Offline: all 332 Stables tests pass, including new-category purchase, equip,
+move, unequip, accessory dependency guards, SQL seed replay and preview category
+isolation. Native visuals/compatibility and live new-category checkout remain pending.
+
+Deployment: copy fxmanifest.lua, shared/tack.lua, client/core/locale.lua,
+client/tack/controller.lua, client/ui/preview.lua, client/ui/stable.lua,
+server/tack/feather.lua, config/tack/categories/ and database/feather_tack.sql from
+C:/coding/bcc-feather-scripts/bcc-stables to their matching bcc-stables paths.
+Merge the nine new item names from feather-inventory/config.lua into existing
+TrustedCharacterCollections['bcc-stables']['stables.tack.v1'].items; preserve other
+settings. Store physical horses, close menus, stop bcc-stables; run the idempotent
+feather_tack.sql against the existing server database (preserves existing definitions).
+Then server console: refresh, restart feather-inventory, ensure bcc-stables.
+No schema ledger migration, Core/Economy/Menu restart or full server restart required.
+Test all category previews, new-piece purchase/equip and take-out/store restore;
+check tail/cloth coexistence and saddle accessory dependency refusals. Reuse the
+established resale/trade UI for a representative new piece. Finish with
+BccStablesHorseStore in player F8 and confirm disappearance.
+
+Unsaddled owned-horse previews now use the same temporary visual saddle as display horses for saddle-dependent categories (horns, stirrups, bags, bedrolls, holsters). It is removed on leaving these categories, never assigned or purchased; real equip still requires an owned equipped saddle. Purchasing standalone parts remains allowed. Clarified localized preview notice. All 62 client menu tests pass, including preview cycling/unchanged saved loadout; live visual check pending. Deploy client/ui/stable.lua and client/core/locale.lua only, close menus then restart bcc-stables; no refresh/config/SQL.
+
+Live acceptance: user confirmed the remaining tack category checks all worked correctly: category previews, representative purchase/equip and physical appearance, store/recall restoration, and tail/saddlecloth independence. Temporary preview saddle for unsaddled horses also separately confirmed working. This does not claim separate live resale/trade coverage for every new category or additional saddlebag storage/stat effects.

@@ -63,7 +63,7 @@ function P.SetTack(token,siteId,horseId,slot,catalogId)
         or GetEntityModel(p.entity)~=GetHashKey(p.modelKey)
         or catalogId~=nil and (not item or item.slot~=slot) then return false end
     p.loadout=p.loadout or {}
-    if catalogId and Tack.PieceSlots[slot].requiresSaddle and not p.loadout.saddle then return false end
+    if catalogId and (Tack.PieceSlots[slot].requiresSaddle or Tack.PieceSlots[slot].needsSaddle) and not p.loadout.saddle then return false end
     if (p.loadout[slot] and p.loadout[slot].catalogId)==catalogId then return true end
     p.loadout[slot]=catalogId and {catalogId=catalogId} or nil
     applyTack(p);clean(p.entity)

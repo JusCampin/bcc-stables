@@ -22,6 +22,10 @@ class StableMenuTest(unittest.TestCase):
             now=0; bucket=0; routeId=nil; joined=0; deleted=0; occupied=false; closedEvents=0
             GetGameTimer=function() return now end
             Wait=function(ms) now=now+ms end
+            exports['feather-core'].GetProvider=function() return {ok=true,value={implementation={GetProfile=function(id)
+                if missingProfile then return {ok=false,code='unavailable'} end
+                return {ok=true,value={firstName='Jane',lastName='Doe'}}
+            end}}} end
             GetPlayerPed=function() return 1 end
             DoesEntityExist=function() return true end
             GetEntityCoords=function() return {x=0,y=0,z=0} end
@@ -69,6 +73,38 @@ class StableMenuTest(unittest.TestCase):
         self.assertTrue(self.menu.Request(3, self.payload(), 'close')['ok'])
         self.assertEqual(self.lua.globals().bucket, 0)
         self.assertFalse(self.menu.IsOpen(3))
+
+    def test_trade_nearby_checks_attested_preview_routes_not_equal_buckets(self):
+        self.lua.execute('''
+            local other={source=4,state='ready',characterId='77777777-7777-4777-8777-777777777777',sessionId=session.sessionId,accountId=session.accountId}
+            local captures={[3]=session,[4]=other};routes={};buckets={};distance=1;vanished=false
+            GetPlayerPed=function(source) return source end
+            -- Match the actual RedM server native, not a FiveM health assumption.
+            GetEntityHealth=function() return 0 end
+            DoesEntityExist=function(ped) return not (vanished and ped==4) end
+            GetEntityCoords=function(ped) return {x=ped==4 and distance or 0,y=0,z=0} end
+            GetPlayerRoutingBucket=function(source) return buckets[source] or 0 end
+            exports['feather-core'].RequireSession=function(_,source) return {ok=true,value=captures[source]} end
+            exports['feather-core'].IsSessionCurrent=function(_,source,sid,cid)
+                local s=captures[source];return s and s.sessionId==sid and s.characterId==cid
+            end
+            exports['feather-assets'].ListAssetsByHolder=function() return {ok=true,value={items={}}} end
+            exports['feather-routing'].CreateRoute=function() joined=joined+1;return {ok=true,value={routeId='route-'..joined}} end
+            exports['feather-routing'].JoinRoute=function(_,route,source) routes[source]=route;buckets[source]=source+100;return {ok=true,value={}} end
+            exports['feather-routing'].GetPlayerRoute=function(_,source) return {ok=true,value={routeId=routes[source]}} end
+            Stables.TackTrade={List=function(s) return {ok=true,value=Stables.StableMenu.TradePlayers(s)} end}
+        ''')
+        self.assertTrue(self.open().ok)
+        self.assertTrue(self.menu.Open(4,self.lua.table_from({'site':'valentine'})).ok)
+        def peers():return self.menu.Request(3,self.payload(),'tack_trade_list').value
+        self.assertEqual(peers()[1].source,4)
+        self.assertEqual(peers()[1].name,'Jane Doe')
+        self.lua.execute('missingProfile=true');self.assertIsNone(peers()[1].name)
+        self.lua.execute('missingProfile=false')
+        self.lua.execute('distance=6');self.assertEqual(len(peers()),0)
+        self.lua.execute('distance=5');self.assertEqual(peers()[1].source,4)
+        self.lua.execute('distance=1;vanished=true');self.assertEqual(len(peers()),0)
+        self.lua.execute("vanished=false;routes[4]='wrong-route'");self.assertEqual(len(peers()),0)
 
     def test_roster_uses_fresh_canonical_names_without_local_name_writes(self):
         self.lua.execute("asset.metadata.name='Willow'")

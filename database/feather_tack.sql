@@ -24,5 +24,41 @@ FROM (
     UNION ALL SELECT 'horse_saddlecloth','Saddlecloth','A saddlecloth owned by your character.',0.25
     UNION ALL SELECT 'horse_stirrups','Stirrups','Stirrups owned by your character.',0.50
     UNION ALL SELECT 'horse_saddle_horn','Saddle Horn','A saddle horn owned by your character.',0.25
+    UNION ALL SELECT 'horse_saddlebag','Saddlebag','Saddlebags owned by your character.',0.50
+    UNION ALL SELECT 'horse_bedroll','Bedroll','Bedrolls owned by your character.',0.50
+    UNION ALL SELECT 'horse_bridle','Bridle','Bridles owned by your character.',0.25
+    UNION ALL SELECT 'horse_holster','Holster','Holsters owned by your character.',0.25
+    UNION ALL SELECT 'horse_horseshoes','Horseshoe','Horseshoes owned by your character.',0.50
+    UNION ALL SELECT 'horse_mask','Mask','Masks owned by your character.',0.25
+    UNION ALL SELECT 'horse_mane','Mane','Manes owned by your character.',0.10
+    UNION ALL SELECT 'horse_tail','Tail','Tails owned by your character.',0.10
+    UNION ALL SELECT 'horse_mustache','Mustache','Mustaches owned by your character.',0.10
 ) seed JOIN categories c ON c.name='Stables' WHERE 1=1
 ON DUPLICATE KEY UPDATE name=VALUES(name);
+
+-- Durable resale quote, surrender and payout recovery. No cross-provider SQL.
+CREATE TABLE IF NOT EXISTS fs_tack_sales (
+    operation_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+    character_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    state ENUM('quoted','retiring','paying','sold','cancelled') NOT NULL,
+    record_json LONGTEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY fs_tack_sales_recovery(state,updated_at), KEY fs_tack_sales_character(character_id,state)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+
+-- Nearby-player offers. Acceptance freezes settlement; recovery uses provider receipts.
+CREATE TABLE IF NOT EXISTS fs_tack_trades (
+    operation_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+    seller_character_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    buyer_character_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    state VARCHAR(24) NOT NULL,
+    record_json LONGTEXT NOT NULL,
+    payment_transaction_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY fs_tack_trade_seller(seller_character_id,state),
+    KEY fs_tack_trade_buyer(buyer_character_id,state),
+    KEY fs_tack_trade_recovery(state,updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;

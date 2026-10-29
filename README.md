@@ -23,7 +23,20 @@
 > Individual parts can be removed separately. Private stable tack storage is
 > implemented and reported working in live testing: existing pieces migrate with their IDs,
 > condition and assemblies intact, and new purchases go directly to the collection.
-> Food and brushes remain carried items.
+> Food and brushes remain carried items. Tack collection access works without
+> owning a horse; Horse Tack uses a labelled local display horse for previews and
+> keeps equip actions restricted to owned horses. No starter horse is granted.
+> This no-horse preview/access update is test-ready; live acceptance is pending.
+> Stable tack buy-back is implemented behind `Config.tack.resaleEnabled` (default
+> false); single-piece and saddle assembly sales passed controlled live testing.
+> Offers default to 50% of the original paid price,
+> reduced by condition, paid in each piece's original currency. Unequipped saddle
+> assemblies sell together; saddlecloths stay separate. Free/paid nearby-player tack trades are now implemented behind
+> `Config.tack.tradingEnabled` (default false); the paid saddle assembly path is
+> live-confirmed. Player offers allow three minutes to coordinate. Both
+> players review exact pieces and price through Tack Trades at the same stable.
+> Rerun the updated tack SQL and deploy the matching Inventory surrender receipt,
+> Economy CheckIssue API/reason and Admin service-policy grant before enabling it.
 > Rerun the updated [feather_tack.sql](database/feather_tack.sql)
 > and retain Inventory's trusted unique-grant entry for `bcc-stables`. Paid purchases
 > also require `Config.commerce.purchasesEnabled`. Assemblies require Inventory
@@ -217,3 +230,5 @@ The `stats` JSON column stores progression ranks. Current health and stamina cor
 ## GitHub
 
 - [bcc-stables](https://github.com/BryceCanyonCounty/bcc-stables)
+
+Tack categories: saddles, saddlecloths, stirrups, saddle horns, saddlebags, bedrolls, bridles, holsters, horseshoes, masks, manes, tails and mustaches. Saddle-dependent bags/bedrolls/holsters remain independent pieces; horns/stirrups remain saddle assemblies. Bags currently provide appearance only, not inventory capacity. See docs/FEATHER_INTEGRATION.md for the item seed and Inventory collection allowlist update.

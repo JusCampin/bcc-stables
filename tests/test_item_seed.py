@@ -12,13 +12,13 @@ class ItemSeedTest(unittest.TestCase):
           max_quantity INTEGER,max_stack_size INTEGER,weight REAL,usable INTEGER,category_id INTEGER,
           type TEXT,instance_mode TEXT);''')
         source=(ROOT/'database/feather_tack.sql').read_text(encoding='utf-8')
-        sql=source[source.index('INSERT INTO categories'):]
+        sql=source[source.index('INSERT INTO categories'):source.index('-- Durable resale')]
         sql=sql.replace('ON DUPLICATE KEY UPDATE name=VALUES(name)','ON CONFLICT(name) DO NOTHING')
         db.executescript(sql);db.executescript(sql)
         self.assertEqual(db.execute("SELECT instance_mode,max_stack_size FROM items WHERE name='horse_saddle'").fetchone(),('unique',1))
         self.assertEqual({r[0] for r in db.execute('SELECT name FROM items')},
-            {'horse_saddle','horse_saddlecloth','horse_stirrups','horse_saddle_horn'})
-        self.assertEqual(db.execute("SELECT COUNT(*) FROM items WHERE instance_mode='unique' AND max_stack_size=1").fetchone()[0],4)
+            {'horse_bridle', 'horse_mustache', 'horse_horseshoes', 'horse_tail', 'horse_saddle', 'horse_stirrups', 'horse_saddlebag', 'horse_mask', 'horse_mane', 'horse_saddlecloth', 'horse_saddle_horn', 'horse_bedroll', 'horse_holster'})
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM items WHERE instance_mode='unique' AND max_stack_size=1").fetchone()[0],13)
         db.execute("UPDATE items SET display_name='Custom Saddle',weight=2.5");db.commit();db.executescript(sql)
         self.assertEqual(db.execute('SELECT display_name,weight FROM items').fetchone(),('Custom Saddle',2.5))
         self.assertNotIn('CREATE TABLE IF NOT EXISTS fs_tack_loadouts',source)
