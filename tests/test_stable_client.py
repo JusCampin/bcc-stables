@@ -144,13 +144,13 @@ class StableClientTest(unittest.TestCase):
     def test_saddle_catalog_is_local_only_reuses_preview_and_restores_on_back(self):
         self.tack()
         g=self.lua.globals()
-        self.assertEqual(len(g.specs['tack-saddle']['options']),180)
-        self.assertEqual(g.labels['tack-position'],'1 of 180')
+        self.assertEqual(len(g.specs['tack-saddle']['options']),176)
+        self.assertEqual(g.labels['tack-position'],'1 of 176')
         self.assertIn('Preview only',g.labels['tack-notice'])
         previews=g.previews
         self.lua.execute("saddle=Tack.CatalogBySlot.saddle[1].id;pages[activePage]['tack-saddle']({value=saddle})")
         self.assertEqual(g.previewSaddle,g.saddle)
-        self.assertEqual(g.labels['tack-position'],'2 of 180')
+        self.assertEqual(g.labels['tack-position'],'2 of 176')
         self.assertEqual(g.labels['tack-price'],'Catalog Price: $10.00 or 1.00 gold')
         self.lua.execute("pages[activePage]['tack-saddle']({value=saddle});Click('tack-back')")
         self.assertIsNone(g.previewSaddle)
@@ -183,7 +183,7 @@ class StableClientTest(unittest.TestCase):
         g=self.lua.globals()
         self.assertEqual(g.specs['tack-saddle']['value'],g.saddle)
         self.assertEqual(g.labels['title'],'Horse Tack')
-        self.assertEqual(g.labels['tack-position'],'4 of 180')
+        self.assertEqual(g.labels['tack-position'],'4 of 176')
         self.assertEqual(g.saddleWrites,1)
 
     def test_tack_is_a_top_tab_for_selected_horse_without_details_button(self):
@@ -777,6 +777,112 @@ class StableClientTest(unittest.TestCase):
         self.lua.execute("Click('horse-1');RunJobs();Click('horse-1');Click('horse-1');RunJobs()")
         self.assertEqual(self.lua.globals().previews,previews)
         self.assertEqual(list(self.lua.globals().calls.values()).count('menu_preview'),reads)
+
+    def test_details_show_saved_bonding_separately_from_catalog_stats(self):
+        self.lua.execute("detail.bonding={xp=125,revision=3};Stables.HorseBonding={Describe=function() return 2,150 end}")
+        self.open();self.lua.execute("Click('horse-1');Click('horse-1-details');RunJobs()")
+        g=self.lua.globals()
+        self.assertEqual(g.labels['bonding-xp'],'Saved XP: 125')
+        self.assertEqual(g.labels['bonding-level'],'Bonding Level: 2/4')
+        self.assertEqual(g.labels['bonding-next'],'Next Bonding Level: 150 XP')
+
+    def test_details_show_pinned_training_ranks_and_next_reward(self):
+        self.lua.execute('''detail.bonding={xp=1000,revision=2,training={level=1,capacity=10,xpPerLevel=1000,
+            base={health=1,stamina=2,handling=2,acceleration=1,speed=2},
+            ranks={health=2,stamina=2,handling=2,acceleration=1,speed=2}}}''')
+        self.open();self.lua.execute("Click('horse-1');Click('horse-1-details');RunJobs()")
+        self.assertEqual(self.lua.globals().labels['training-level'],'Training Level: 1')
+        self.assertEqual(self.lua.globals().labels['training-health'],'Health: 3/10 (+1)')
+        self.assertEqual(self.lua.globals().labels['training-next'],'Next Stat Reward: 2000 XP')
+
+    def test_horse_sale_reviews_exact_terms_and_refreshes_empty_roster(self):
+        self.lua.execute('''
+            Config.sales={enabled=true};local original=Stables.Client.Rpc
+            Stables.Client.Rpc=function(action,p)
+                if action=='menu_horse_sale_quote' then
+                    return {ok=true,value={operationId=data.token,horseId=detail.horseId,name='Willow',amount=5300,currency=p.currency,state='quoted'}}
+                end
+                if action=='menu_horse_sale_confirm' then
+                    assert(p.amount==5300 and p.currency=='dollars' and p.operationId==data.token)
+                    saleConfirmed=true;data.entries={};return {ok=true,value={state='sold'}}
+                end
+                return original(action,p)
+            end
+        ''')
+        self.open()
+        self.lua.execute("Click('horse-1');Click('horse-1-details');RunJobs();Click('horse-sale-open');RunJobs()")
+        self.assertEqual(self.lua.globals().labels['title'],'Sell Horse')
+        self.assertIn('$53.00',self.lua.globals().labels['horse-sale-price'])
+        self.assertEqual(self.lua.globals().specs['refresh'].row,self.lua.globals().specs['horse-sale'].row)
+        self.lua.execute("events['feather-core:locale:changed']()")
+        self.assertEqual(self.lua.globals().labels['title'],'Sell Horse')
+        self.assertIn('$53.00',self.lua.globals().labels['horse-sale-price'])
+        spec=self.lua.globals().specs['horse-sale']
+        self.assertIn('$53.00',spec.confirm.message)
+        self.assertIn('saddlebag contents remain yours',spec.confirm.message)
+        self.assertFalse(self.lua.globals().saleConfirmed)
+        self.lua.execute("Click('horse-sale');RunJobs()")
+        self.assertTrue(self.lua.globals().saleConfirmed)
+        self.assertEqual(self.lua.globals().labels['title'],'My Horses')
+
+    def horse_trade(self):
+        self.lua.execute('''
+            PlayerId=function() return 0 end;GetPlayerServerId=function() return 3 end
+            Config.sales={tradingEnabled=true};local original=Stables.Client.Rpc
+            packageItems={{instanceId=202,catalogId=Tack.CatalogBySlot.saddlebag[1].id,condition=90,maximum=100,contents=2,
+                contentItems={{itemName='consumable_apple',itemLabel='Apple',quantity=5},{itemName='consumable_carrots',itemLabel='Carrots',quantity=2}}}}
+            Stables.Client.Rpc=function(action,p)
+                if action=='menu_tack_trade_list' then return {ok=true,value={available=true,players={},offers={}}} end
+                if action=='menu_horse_trade_list' then
+                    return {ok=true,value={available=true,players={{source=9,name='Jane Doe'}},horse=detail,items=packageItems,offers=tradeOffer and {tradeOffer} or {}}}
+                end
+                if action=='menu_horse_trade_offer' then
+                    offeredPayload=p;tradeOffer={kind='horse',operationId=data.token,state='draft',horse=detail,
+                        includeTack=p.includeTack,items=p.includeTack and packageItems or {},amount=p.amount,currency=p.currency,
+                        sellerSource=3,buyerSource=9,sellerName='John Doe',buyerName='Jane Doe'}
+                    return {ok=true,value=tradeOffer}
+                end
+                if action=='menu_horse_trade_respond' then
+                    respondedPayload=p;tradeOffer.state='offered';return {ok=true,value=tradeOffer}
+                end
+                return original(action,p)
+            end
+        ''')
+        self.open()
+        self.lua.execute("Click('horse-1');Click('horse-1-details');RunJobs();Click('horse-trade-open');RunJobs()")
+
+    def test_horse_package_checkbox_defaults_off_and_contents_are_collapsed(self):
+        self.horse_trade();g=self.lua.globals()
+        self.assertEqual(g.labels['title'],'Trades');self.assertFalse(g.specs['trade-include-tack'].value)
+        self.assertEqual(g.specs['refresh'].row,g.specs['trade-review'].row)
+        self.assertEqual(g.specs['trade-back'].row,g.specs['close'].row)
+        self.lua.execute("pages[activePage]['trade-include-tack']({value=true})")
+        self.assertFalse(g.specs['draft-contents-1'].value)
+        self.assertEqual(g.specs['draft-contents-1-items'].section,'draft-contents-1')
+        self.assertEqual(g.labels['draft-contents-1-items'],'Apple x5\nCarrots x2')
+        self.lua.execute("pages[activePage]['trade-price']({value='12.50'});Click('trade-review');RunJobs()")
+        self.assertTrue(g.offeredPayload.includeTack);self.assertEqual(g.offeredPayload.amount,1250)
+        self.assertFalse(g.specs['offer-1-contents-1'].value)
+        self.assertEqual(g.specs['refresh'].row,g.specs['trade-accept-1'].row)
+        self.assertEqual(g.specs['trade-cancel-1'].row,g.specs['close'].row)
+        self.assertIn('Jane Doe',g.specs['trade-accept-1'].confirm.message)
+        self.assertIn('$12.50',g.specs['trade-accept-1'].confirm.message)
+        self.lua.execute("Click('trade-accept-1');RunJobs()")
+        self.assertTrue(g.respondedPayload.includeTack)
+
+    def test_horse_only_offer_preserves_unchecked_boolean_on_send(self):
+        self.horse_trade();self.lua.execute("Click('trade-review');RunJobs();Click('trade-accept-1');RunJobs()")
+        self.assertFalse(self.lua.globals().offeredPayload.includeTack)
+        self.assertFalse(self.lua.globals().respondedPayload.includeTack)
+
+    def test_horse_recipient_sees_same_collapsed_contents_and_accepts_package(self):
+        self.horse_trade()
+        self.lua.execute("pages[activePage]['trade-include-tack']({value=true});Click('trade-review');RunJobs();tradeOffer.state='offered';GetPlayerServerId=function() return 9 end;Click('refresh');RunJobs()")
+        g=self.lua.globals()
+        self.assertFalse(g.specs['offer-1-contents-1'].value)
+        self.assertIn('Apple x5',g.labels['offer-1-contents-1-items'])
+        self.lua.execute("Click('trade-accept-1');RunJobs()")
+        self.assertTrue(g.respondedPayload.includeTack)
 
     def test_roster_header_marks_selection_without_repeating_stored(self):
         self.lua.execute("data.entries[1].name='Willow'")

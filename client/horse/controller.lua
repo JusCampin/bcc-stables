@@ -89,7 +89,7 @@ local function initialize(r)
     end
     error('Horse did not settle on loaded ground')
 end
-local function ready(r, condition, tack)
+local function ready(r, condition, tack, bonding)
     assert(usable(r) and PlayerPedId() == r.ped, 'Horse control or character changed')
     -- Outfit initialization and settling have completed before applying sex.
     if r.gender == 'male' or r.gender == 'female' then
@@ -97,6 +97,7 @@ local function ready(r, condition, tack)
         Citizen.InvokeNative(0xCC8CA3E88256E58F, r.entity, false, true, true, true, false)
     end
     if tack and next(tack) then assert(HorseAppearance.applyLoadout(r.entity,tack),'Tack appearance unavailable') end
+    r.saddlebag=tack and tack.saddlebag and tack.saddlebag.instanceId
     local saddle, mount = slots(r.player)
     assert((saddle == 0 or saddle == r.entity) and (mount == 0 or mount == r.entity),
         'Another horse owns the native association')
@@ -117,6 +118,10 @@ local function ready(r, condition, tack)
     if Config.brushing and Config.brushing.enabled then
         Citizen.InvokeNative(0xA3DB37EDF9A74635, r.player, r.entity, 49, 1, true)
     end
+    if bonding and Stables.HorseBonding then
+        local applied,level=Stables.HorseBonding.Apply(r,bonding)
+        if applied then C.Message(C.Text('menu_bondingRestored',bonding.xp,level)) end
+    end
     if condition then
         for index, key in ipairs({ 'healthCore', 'staminaCore' }) do
             local value = condition[key]
@@ -129,6 +134,10 @@ local function ready(r, condition, tack)
     SetBlockingOfNonTemporaryEvents(r.entity, false)
     FreezeEntityPosition(r.entity, false)
     SetEntityVisible(r.entity, true)
+    -- PP_HORSE_ITEMS (28), PP_MODE_HIDE (1): show native Cargo only with bags.
+    if Config.saddlebags and Config.saddlebags.enabled then Citizen.InvokeNative(0xA3DB37EDF9A74635,r.player,r.entity,28,1,r.saddlebag==nil) end
+    -- Honor the native target-menu Flee setting independently of Cargo.
+    Citizen.InvokeNative(0xA3DB37EDF9A74635,r.player,r.entity,33,1,not (Config.stable and Config.stable.fleeEnabled==true))
     r.bound = true
     C.Message('horse ready; riding and native leading enabled.')
     if condition and Config.feeding and Config.feeding.enabled then
@@ -196,7 +205,7 @@ RegisterNetEvent('bcc-stables:call:create', function(spec)
                 and bound.value.generationId == r.generationId and bound.value.netId == r.netId
                 and bound.value.horseId == r.horseId, 'Horse binding refused: ' .. tostring(bound.code))
             if active ~= r or r.cancelled then return end
-            ready(r, bound.value.condition, bound.value.tack)
+            ready(r, bound.value.condition, bound.value.tack,bound.value.bonding)
         end)
         if r.hash then SetModelAsNoLongerNeeded(r.hash) end
         if not ok then
@@ -253,8 +262,9 @@ RegisterNetEvent('bcc-stables:call:store_check', function(p)
         if not ok then C.Message('occupancy could not be verified: ' .. tostring(failure)) end
     end)
 end)
-local function action(name)
+local function action(name,payload)
     if busy then return false end
+    if payload and payload.generationId and (not active or active.generationId~=payload.generationId) then return false end
     busy = true
     CreateThread(function()
         local ok, reply = pcall(function()
@@ -263,7 +273,7 @@ local function action(name)
                 -- Let the native detach before the current simulator reads it.
                 Wait(250)
             end
-            return C.Rpc(name, {})
+            return C.Rpc(name, payload or {})
         end)
         busy = false
         if ok and type(reply) == 'table' and reply.code == 'cleanup_pending' then
@@ -280,13 +290,14 @@ local function action(name)
 end
 function H.Call() return action('request') end
 
-function H.Store() return action('store_current') end
+function H.Store(generationId) return action('store_current',generationId and {generationId=generationId} or nil) end
+function H.Flee(generationId) return action('store_current',{generationId=generationId,flee=true}) end
 
 function H.GetActive()
     local r = active
     if not r or not r.bound or not same(r) then return nil end
     return { id = r.horseId, entity = r.entity, netId = r.netId, generationId = r.generationId, observerId = r
-    .observerId, modelKey = r.modelKey }
+    .observerId, modelKey = r.modelKey, saddlebag = r.saddlebag }
 end
 
 -- Streaming can remove the local entity while the server's bound call remains

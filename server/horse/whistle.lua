@@ -29,17 +29,18 @@ local function issue(r,mode)
     cancel(r)
     r.movementSequence=(r.movementSequence or 0)+1
     local ticket={sequence=r.movementSequence,mode=mode,owner=owner,target=target,targetNet=targetNet,
-        expires=GetGameTimer()+5000,endsAt=GetGameTimer()+(mode=='follow' and 30000 or 20000)}
+        expires=GetGameTimer()+5000,endsAt=mode=='flee' and r.flee.endsAt or GetGameTimer()+(mode=='follow' and 30000 or 20000)}
     r.movement=ticket
     W.pending[r.id]=r
     TriggerClientEvent('bcc-stables:movement:execute',owner,{generationId=r.id,sequence=ticket.sequence})
     return F.Ok({generationId=r.id,mode=mode,networkOwner=owner})
 end
+function W.Flee(r) return issue(r,'flee') end
 function W.Request(source,p)
     if type(p)~='table' or (p.mode~='approach' and p.mode~='toggle_follow') then return F.Error('invalid_input','Whistle mode required.') end
     local session=F.RequireSession(source); if not session.ok then return session end
     local r=C.MovementRecord(session.value)
-    if not r or r.whistleBusy or r.care then return F.Error('horse_not_ready','A current idle owned horse is required.') end
+    if not r or r.flee or r.whistleBusy or r.care then return F.Error('horse_not_ready','A current idle owned horse is required.') end
     local mode=p.mode=='toggle_follow' and (r.movement and r.movement.mode=='follow' and 'stop' or 'follow') or 'approach'
     if mode~='stop' and GetGameTimer()-(r.lastWhistle or -2000)<1500 then return F.Error('rate_limited','Wait before whistling again.') end
     r.whistleBusy=true
@@ -95,9 +96,12 @@ C.MovementTick=function(r)
     local now=GetGameTimer()
     if not current(r) or GetPlayerPed(r.session.source)~=t.target
         or NetworkGetNetworkIdFromEntity(t.target)~=t.targetNet then cancel(r); return end
-    local a,b=GetEntityCoords(r.entity),GetEntityCoords(t.target)
-    if t.mode~='stop' and (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2>10000 then cancel(r); return end
+    if t.mode~='stop' and t.mode~='flee' then
+        local a,b=GetEntityCoords(r.entity),GetEntityCoords(t.target)
+        if (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2>10000 then cancel(r); return end
+    end
     if (not t.claimed and now>t.expires) or now>=t.endsAt then cancel(r); return end
+    if t.mode=='flee' and NetworkGetEntityOwner(r.entity)~=t.owner then issue(r,'flee');return end
     if t.mode=='follow' and t.claimed and (NetworkGetEntityOwner(r.entity)~=t.owner or t.endsAt-now<=5000) then issue(r,'follow') end
 end
 function W.Install()

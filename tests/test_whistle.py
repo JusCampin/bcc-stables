@@ -24,6 +24,49 @@ class WhistleServerTest(unittest.TestCase):
     def ticket(self,sequence=1):
         return self.lua.table_from({'generationId':GEN,'sequence':sequence})
 
+    def flee(self):
+        self.lua.execute('Config={stable={fleeEnabled=true}};autoOccupancy=true')
+        return self.fixture.controller.Store(3,None,GEN,True)
+
+    def test_flee_waits_ten_seconds_and_reserves_generation_before_cleanup(self):
+        result=self.flee();self.assertTrue(result.ok);self.assertEqual(result.value.state,'fleeing')
+        self.assertEqual(self.lua.globals().deleteCount,0)
+        self.assertEqual(self.whistle.Claim(3,self.ticket()).value.mode,'flee')
+        self.assertFalse(self.request('approach').ok)
+        self.assertEqual(self.fixture.controller.Call(3).code,'cleanup_pending')
+        self.lua.execute('time=9500');self.fixture.controller.Tick()
+        self.assertEqual(self.lua.globals().deleteCount,0)
+        self.lua.execute('time=10000');self.fixture.controller.Tick()
+        self.assertEqual(self.lua.globals().deleteCount,1)
+        self.assertEqual(self.fixture.case.scalar('SELECT COUNT(*) FROM fs_call_slots'),0)
+
+    def test_repeated_flee_does_not_extend_deadline_and_disabled_flee_keeps_horse(self):
+        self.lua.execute('Config={stable={fleeEnabled=false}};autoOccupancy=true')
+        denied=self.fixture.controller.Store(3,None,GEN,True)
+        self.assertEqual(denied.code,'flee_disabled');self.assertEqual(self.lua.globals().deleteCount,0)
+        self.assertTrue(self.flee().ok)
+        self.lua.execute('time=4000')
+        self.assertTrue(self.fixture.controller.Store(3,None,GEN,True).ok)
+        self.assertEqual(self.fixture.controller.MovementRecord(self.lua.globals().session).flee.endsAt,10000)
+
+    def test_flee_migration_keeps_original_deadline(self):
+        self.assertTrue(self.flee().ok);self.assertTrue(self.whistle.Claim(3,self.ticket()).ok)
+        self.lua.execute('time=4000;entities[100].owner=4');self.fixture.controller.Tick()
+        moved=self.whistle.Claim(4,self.ticket(2));self.assertTrue(moved.ok)
+        self.assertEqual(moved.value.mode,'flee');self.assertEqual(moved.value.remainingMs,6000)
+
+    def test_flee_rechecks_rider_before_deletion_and_retains_occupied_horse(self):
+        self.assertTrue(self.flee().ok);self.whistle.Claim(3,self.ticket())
+        self.lua.execute('occupied=true;time=10000');self.fixture.controller.Tick()
+        self.assertEqual(self.lua.globals().deleteCount,0)
+        self.assertEqual(self.fixture.case.scalar('SELECT state FROM fs_call_leases'),'active')
+        self.assertIsNone(self.fixture.controller.MovementRecord(self.lua.globals().session).flee)
+
+    def test_flee_cleans_up_at_original_distance_threshold(self):
+        self.assertTrue(self.flee().ok);self.whistle.Claim(3,self.ticket())
+        self.lua.execute('entities[100].coords.x=201;time=500');self.fixture.controller.Tick()
+        self.assertEqual(self.lua.globals().deleteCount,1)
+
     def test_approach_ticket_claim_once(self):
         self.assertTrue(self.request('approach')['ok'])
         claimed=self.whistle.Claim(3,self.ticket())
@@ -130,6 +173,22 @@ class WhistleClientTest(unittest.TestCase):
 
     def execute(self):
         self.lua.execute("source=65535; handlers['bcc-stables:movement:execute']({generationId=spec.generationId,sequence=1}); jobs[#jobs]()")
+
+    def test_flee_uses_original_native_parameters_only_on_current_simulator(self):
+        self.lua.execute("""
+            mode='flee'
+            SetPedKeepTask=function(horse,value) assert(horse==100 and value);kept=true end
+            local native=Citizen.InvokeNative
+            Citizen.InvokeNative=function(hash,...)
+                if hash==0x22B0D0E37CCB840D then
+                    local horse,target,distance,duration,flags,speed=...
+                    assert(horse==100 and target==10 and distance==100.0 and duration==100 and flags==6 and speed==3.0)
+                    fleeTasks=(fleeTasks or 0)+1;return
+                end
+                return native(hash,...)
+            end
+        """)
+        self.execute();self.assertEqual(self.lua.globals().fleeTasks,1);self.assertTrue(self.lua.globals().kept)
 
     def test_approach_executes_then_stops_at_approved_distance(self):
         self.execute()

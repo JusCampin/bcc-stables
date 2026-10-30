@@ -34,9 +34,19 @@ end
 
 local function read(session, horseId,includeAsset)
     local called, row
+    local statement=SQL
+    if Stables.Bonding and Stables.Bonding.Enabled() then
+        statement=statement:gsub('horse_condition.revision AS condition_revision',
+            'horse_condition.revision AS condition_revision, bonding.xp AS bonding_xp, bonding.revision AS bonding_revision')
+            :gsub(' WHERE stable.character_id',
+            ' LEFT JOIN fs_horse_bonding bonding ON bonding.horse_id=horse.horse_id\n WHERE stable.character_id')
+        if Stables.Bonding.StatRewardsEnabled() then
+            statement=statement:gsub('bonding.revision AS bonding_revision','bonding.revision AS bonding_revision, bonding.training_json AS bonding_training')
+        end
+    end
     if horseId then
-        called,row=pcall(DB.one,SQL:gsub('horse.horse_id=stable.selected_horse_id','horse.horse_id=?'),horseId,session.characterId)
-    else called,row=pcall(DB.one,SQL,session.characterId) end
+        called,row=pcall(DB.one,statement:gsub('horse.horse_id=stable.selected_horse_id','horse.horse_id=?'),horseId,session.characterId)
+    else called,row=pcall(DB.one,statement,session.characterId) end
     if not F.IsCurrent(session) then return F.Error('session_stale', 'The character session changed.') end
     if not called then return F.Error('database_unavailable', 'Saved horse selection could not be read.') end
     if row == nil then return horseId and invalid() or F.Ok({ selected = false, selectionRevision = 0 }) end
@@ -47,9 +57,9 @@ local function read(session, horseId,includeAsset)
     end
     if not F.IsUuid(row.horse_id) or (horseId or row.selected_horse_id) ~= row.horse_id
         or row.owner_character_id ~= session.characterId or not F.IsUuid(row.origin_operation_id)
-        or row.operation_state ~= 'fulfilled' or row.operation_character_id ~= session.characterId
+        or row.operation_state ~= 'fulfilled' or not F.IsUuid(row.operation_character_id)
         or row.operation_horse_id ~= row.horse_id or row.registration_state ~= 'linked'
-        or row.registration_character_id ~= session.characterId or row.registration_horse_id ~= row.horse_id
+        or row.registration_character_id ~= row.operation_character_id or row.registration_horse_id ~= row.horse_id
         or row.request_id ~= 'stables.register:' .. row.origin_operation_id
         or not F.IsUuid(row.asset_id) or not F.IsRevision(tonumber(row.asset_revision))
         or tonumber(row.asset_revision) < 1 or not F.IsRevision(tonumber(row.projection_revision))
@@ -84,7 +94,11 @@ local function read(session, horseId,includeAsset)
             or not F.IsRevision(revision) or not F.IsRevision(policy) or policy<1 then return invalid() end
         condition={healthCore=health,staminaCore=stamina,revision=revision,policyRevision=policy}
     end
-    return F.Ok({ selected = row.selected_horse_id==row.horse_id, horseId = row.horse_id, assetId = row.asset_id, condition=condition,
+    local bonding
+    if Stables.Bonding and Stables.Bonding.Enabled() then
+        local saved=Stables.Bonding.FromOwnedRow(row);if not saved.ok then return saved end;bonding=saved.value
+    end
+    return F.Ok({ selected = row.selected_horse_id==row.horse_id, horseId = row.horse_id, assetId = row.asset_id, condition=condition,bonding=bonding,
         name=R.NormalizeName(asset.metadata.name),gender=(asset.metadata.gender=='male' or asset.metadata.gender=='female') and asset.metadata.gender or nil,_assetSnapshot=includeAsset and asset or nil,
         modelKey = row.model_key, operationId = row.origin_operation_id,
         selectionRevision = tonumber(row.selection_revision), projectionRevision = tonumber(row.projection_revision),

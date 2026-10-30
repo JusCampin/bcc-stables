@@ -126,6 +126,15 @@ class CallRepositoryTest(unittest.TestCase):
     def reserve(self):
         return self.repo.Reserve(self.lua.globals().session, self.lua.globals().horse, GEN, EPOCH)
 
+    def test_transferred_horse_calls_with_original_purchase_provenance(self):
+        buyer='77777777-7777-4777-8777-777777777777'
+        self.db.execute('UPDATE fs_character_stables SET character_id=?',(buyer,))
+        self.db.execute('UPDATE fs_horses SET owner_character_id=?',(buyer,));self.db.commit()
+        self.lua.globals().session.characterId=buyer
+        self.lua.execute("exports['feather-core'].IsSessionCurrent=function() return true end")
+        self.assertTrue(self.reserve().ok)
+        self.assertTrue(self.bind().ok)
+
     def bind(self):
         return self.repo.Bind(self.lua.globals().session, GEN, self.lua.globals().observation)
 

@@ -2,8 +2,9 @@ Stables.StableUI = {}
 local U, C, P = Stables.StableUI, Stables.Client, Stables.Preview
 local Menu = exports['feather-menu-v2']
 local state, opening = nil, false
-local renderTrades,openTrades
+local renderTrades,openTrades,openHorseTrade
 local entryPrompt
+local renderSale
 local render, renderDetails, renderRename, renderCatalog, restoreRoster, showCatalogCoat, renderCheckout, renderTack, openTack
 local function yes(v) return v == true or v == 1 end
 
@@ -79,6 +80,7 @@ local function preview(s, row)
 end
 
 local function page(s, key)
+    if key ~= 'horse-sale' then s.saleForm = nil end
     if key ~= 'tack' and s.tack then
         if s.tack.horse then P.RestoreTack(s.token, s.site, s.tack.horse.horseId) end
         s.tack = nil
@@ -104,12 +106,14 @@ local function activate(s, id, old)
         { pageId = rosterId, label = C.Text('menu_title') },
         { pageId = catalogId, label = C.Text('menu_browseCatalog') },
         { pageId = tackId, label = C.Text('menu_tack') },
-        { pageId = tradesId, label = C.Text('menu_tackTrades') },
+        { pageId = tradesId, label = C.Text(Config.sales and Config.sales.tradingEnabled and 'menu_trades' or 'menu_tackTrades') },
     } }, function(event)
         if state ~= s or s.busy then return end
         P.StopRotation()
         if event.toPageId == rosterId and s.tab ~= 'roster' then
-            restoreRoster(s)
+            if s.tab=='trades' then
+                request(s,'roster',{},function(data) s.data=data;s.selectedHorse=nil;restoreRoster(s) end)
+            else restoreRoster(s) end
         elseif event.toPageId == catalogId and s.tab ~= 'catalog' then
             local saved = s.catalogSelection
             if saved and saved.breed and saved.model then showCatalogCoat(s, saved.breed, saved.model)
@@ -184,15 +188,50 @@ end
 
 local function tradeLines(q)
     local lines={}
+    if q.kind=='horse' then
+        lines[#lines+1]=C.Text('menu_horseTradeHorse',q.horse.name or q.horse.modelKey)
+        lines[#lines+1]=C.Text(q.includeTack and 'menu_horseTradeIncluded' or 'menu_horseTradeRetained')
+    end
     for _,piece in ipairs(q.items) do
         local catalog=Tack.GetItem(piece.catalogId)
         lines[#lines+1]=C.Text('menu_tackSaleLine',catalog and tackLabel(catalog) or piece.catalogId,piece.instanceId,piece.condition,piece.maximum)
+        if (piece.contents or 0)>0 then lines[#lines+1]=C.Text('menu_saddlebagsContents',piece.contents) end
     end
     return table.concat(lines,'\n')
 end
-openTrades=function(s,instanceId)
+local function tradeContents(add,items,prefix)
+    for index,piece in ipairs(items or {}) do
+        if piece.contentItems and #piece.contentItems>0 then
+            local section=prefix..'-contents-'..index
+            add('accordion',section,{label=C.Text('menu_horseTradeContents',piece.contents or 0),value=false})
+            local lines={}
+            for _,item in ipairs(piece.contentItems) do lines[#lines+1]=C.Text('menu_horseTradeContentLine',item.itemLabel or item.itemName,item.quantity) end
+            add('textdisplay',section..'-items',{section=section,value=table.concat(lines,'\n')})
+        end
+    end
+end
+local function tradeData(s,horseId,done,failed)
     request(s,'tack_trade_list',{},function(data)
+        if not Config.sales or not Config.sales.tradingEnabled then done(data);return end
+        request(s,'horse_trade_list',{horseId=horseId},function(horses)
+            data.available=data.available or horses.available
+            data.offers=data.offers or {}
+            for _,offer in ipairs(horses.offers or {}) do data.offers[#data.offers+1]=offer end
+            data.horse=horses.horse;data.items=horses.items
+            if horses.available then data.players=horses.players end
+            done(data)
+        end,failed)
+    end,failed)
+end
+openTrades=function(s,instanceId)
+    tradeData(s,nil,function(data)
         s.trade={data=data,instanceId=instanceId,currency='dollars',price='0'}
+        renderTrades(s)
+    end)
+end
+openHorseTrade=function(s,horse)
+    tradeData(s,horse.horseId,function(data)
+        s.trade={data=data,horseId=horse.horseId,originHorse=horse,currency='dollars',price='0',includeTack=false}
         renderTrades(s)
     end)
 end
@@ -200,17 +239,29 @@ renderTrades=function(s)
     if state~=s then return end
     local f=s.trade or {data={players={},offers={}}};s.trade=f
     local id,old,add=page(s,'trades')
-    add('header','title',{value=C.Text('menu_tackTrades'),slot='header'})
+    add('header','title',{value=C.Text(Config.sales and Config.sales.tradingEnabled and 'menu_trades' or 'menu_tackTrades'),slot='header'})
     local function failed(r) f.error=r.code;renderTrades(s) end
     local function refresh()
-        request(s,'tack_trade_list',{},function(data)
+        tradeData(s,f.horseId,function(data)
             f.data=data;f.error=nil;renderTrades(s)
         end,failed)
     end
+    add('button','refresh',{label=C.Text('menu_refresh'),slot='footer',row='trade-primary'},refresh)
+    local hasCancel=false
     if not f.data.available then add('textdisplay','trade-disabled',{value=C.Text('menu_tackTradeDisabled')})
     else
-        add('textdisplay','trade-help',{value=C.Text('menu_tackTradeHelp')})
-        if f.instanceId then
+        add('textdisplay','trade-help',{value=C.Text(Config.sales and Config.sales.tradingEnabled and 'menu_horseTradeHelp' or 'menu_tackTradeHelp')})
+        if f.horseId then
+            add('subheader','trade-horse',{value=f.data.horse and name(f.data.horse) or C.Text('menu_unknown')})
+            add('checkbox','trade-include-tack',{label=C.Text('menu_horseTradeCheckbox'),value=f.includeTack==true},function(e)
+                if not s.busy then f.includeTack=e.value==true;renderTrades(s) end
+            end)
+            if f.includeTack then
+                add('textdisplay','trade-package',{value=tradeLines({items=f.data.items or {}})})
+                tradeContents(add,f.data.items,'draft')
+            else add('textdisplay','trade-retained',{value=C.Text('menu_horseTradeRetained')}) end
+        end
+        if f.instanceId or f.horseId then
             local players={}
             for _,p in ipairs(f.data.players) do
                 local label=tradePlayerName(p.source,p.name)
@@ -225,45 +276,55 @@ renderTrades=function(s)
                 add('input','trade-price',{label=C.Text('menu_tackTradePrice'),value=f.price,maxLength=12},function(e) f.price=e.value end)
                 add('arrows','trade-currency',{label=C.Text('menu_currency'),value=f.currency,options={
                     {value='dollars',label=C.Text('menu_cash')},{value='gold',label=C.Text('menu_gold')}}},function(e) f.currency=e.value end)
-                add('button','trade-review',{label=C.Text('menu_tackTradeReview'),slot='footer'},function()
+                add('button','trade-review',{label=C.Text('menu_tackTradeReview'),slot='footer',row='trade-primary'},function()
                     local price=type(f.price)=='string' and f.price:match('^%d+%.?%d?%d?$') and tonumber(f.price)
                     if not price or price>10000000 then f.error='invalid_price';renderTrades(s);return end
-                    request(s,'tack_trade_offer',{instanceId=f.instanceId,recipientSource=tonumber(f.recipient),amount=math.floor(price*100+0.5),currency=f.currency},function(q)
-                        f.instanceId=nil;f.data.offers={q};f.error=nil;renderTrades(s)
+                    local payload={instanceId=f.instanceId,horseId=f.horseId,recipientSource=tonumber(f.recipient),amount=math.floor(price*100+0.5),currency=f.currency}
+                    if f.horseId then payload.includeTack=f.includeTack==true end
+                    request(s,f.horseId and 'horse_trade_offer' or 'tack_trade_offer',payload,function(q)
+                        f.instanceId=nil;f.horseId=nil;f.data.offers={q};f.error=nil;renderTrades(s)
                     end,failed)
                 end)
             end
         end
-        if #f.data.offers==0 and not f.instanceId then add('textdisplay','trade-empty',{value=C.Text('menu_tackTradeEmpty')}) end
+        if #f.data.offers==0 and not f.instanceId and not f.horseId then add('textdisplay','trade-empty',{value=C.Text(Config.sales and Config.sales.tradingEnabled and 'menu_tradesEmpty' or 'menu_tackTradeEmpty')}) end
         for index,q in ipairs(f.data.offers) do
             add('textdisplay','trade-party-'..index,{value=tradeParties(q)})
             add('textdisplay','trade-items-'..index,{value=tradeLines(q)})
-            add('textdisplay','trade-state-'..index,{value=C.Text('menu_tackTradeState_'..q.state)})
+            tradeContents(add,q.items,'offer-'..index)
+            add('textdisplay','trade-state-'..index,{value=C.Text((q.kind=='horse' and 'menu_horseTradeState_' or 'menu_tackTradeState_')..q.state)})
             local actionable=q.state=='draft' or q.state=='offered'
             -- Server authorizes the participant role; buyer accept isn't shown to seller.
             local own=GetPlayerServerId(PlayerId())
             if actionable and (q.state=='draft' and own==q.sellerSource or q.state=='offered' and own==q.buyerSource) then
-                add('button','trade-accept-'..index,{label=C.Text(q.state=='draft' and 'menu_tackTradeSend' or 'menu_tackTradeAccept'),slot='footer',
-                    confirm={title=C.Text('menu_tackTrades'),message=tradeParties(q)..'\n'..tradeLines(q),
+                add('button','trade-accept-'..index,{label=C.Text(q.state=='draft' and 'menu_tackTradeSend' or 'menu_tackTradeAccept'),slot='footer',row='trade-primary',
+                    confirm={title=C.Text(q.kind=='horse' and 'menu_trades' or 'menu_tackTrades'),message=tradeParties(q)..'\n'..tradeLines(q),
                         confirmLabel=C.Text(q.state=='draft' and 'menu_tackTradeSend' or 'menu_tackTradeAccept'),cancelLabel=C.Text('menu_cancel')}},function()
-                    request(s,'tack_trade_respond',{operationId=q.operationId,accept=true,amount=q.amount,currency=q.currency},function(value)
+                    request(s,q.kind=='horse' and 'horse_trade_respond' or 'tack_trade_respond',{operationId=q.operationId,accept=true,amount=q.amount,currency=q.currency,includeTack=q.includeTack},function(value)
                         f.data.offers={value};f.error=nil;renderTrades(s)
                     end,failed)
                 end)
             end
-            if actionable then add('button','trade-cancel-'..index,{label=C.Text('menu_cancel'),slot='footer'},function()
-                request(s,'tack_trade_respond',{operationId=q.operationId,accept=false,amount=q.amount,currency=q.currency},refresh,failed)
+            if actionable then hasCancel=true;add('button','trade-cancel-'..index,{label=C.Text('menu_cancel'),slot='footer',row='trade-navigation'},function()
+                request(s,q.kind=='horse' and 'horse_trade_respond' or 'tack_trade_respond',{operationId=q.operationId,accept=false,amount=q.amount,currency=q.currency,includeTack=q.includeTack},refresh,failed)
             end) end
         end
     end
     if f.error then add('textdisplay','trade-error',{value=C.Text('menu_tackTradeError',f.error)}) end
-    add('button','refresh',{label=C.Text('menu_refresh'),slot='footer',row='navigation'},refresh)
-    add('button','close',{label=C.Text('menu_close'),slot='footer',row='navigation'},function() close(s) end)
+    if not hasCancel then
+        add('button','trade-back',{label=C.Text('menu_back'),slot='footer',row='trade-navigation'},function()
+            if s.busy then return end
+            if f.originHorse and f.horseId then
+                request(s,'preview',{horseId=f.horseId},function(horse) renderDetails(s,horse) end)
+            else request(s,'roster',{},function(data) s.data=data;s.selectedHorse=nil;restoreRoster(s) end) end
+        end)
+    end
+    add('button','close',{label=C.Text('menu_close'),slot='footer',row='trade-navigation'},function() close(s) end)
     activate(s,id,old)
 end
 
 local function tackError(reply)
-    local keys = {tack_sale_fitted='tackSaleFitted',tack_sale_no_value='tackSaleNoValue',tack_sale_disabled='tackSaleDisabled',
+    local keys = {storage_not_empty='saddlebagsEmptyRequired',tack_sale_fitted='tackSaleFitted',tack_sale_no_value='tackSaleNoValue',tack_sale_disabled='tackSaleDisabled',
         tack_sale_payout_unavailable='tackSaleUnavailable',tack_sale_pending='tackSalePending',insufficient_funds='purchaseFunds',quote_expired='purchaseExpired',price_conflict='purchaseExpired',
         purchase_disabled='purchaseDisabled',purchase_restricted='purchaseRestricted',
         collection_full='tackInventoryFull',tack_saddle_required='tackSaddleRequired',tack_dependents_equipped='tackDependents',tack_conflict='tackConflict',tack_item_unavailable='tackConflict',horse_busy='tackConflict',tack_inventory_full='tackInventoryFull'}
@@ -737,6 +798,57 @@ renderRename = function(s, form)
     activate(s, id, old)
 end
 
+renderSale = function(s, form)
+    if state ~= s then return end
+    s.saleForm=form;s.detail=nil;s.renameForm=nil
+    local horse,q=form.horse,form.quote
+    local id,old,add=page(s,'horse-sale')
+    add('header','title',{value=C.Text('menu_horseSaleSell'),slot='header'})
+    add('subheader','horse',{value=q.name,slot='header'})
+    local function quote(currency)
+        request(s,'horse_sale_quote',{horseId=horse.horseId,currency=currency},function(value)
+            form.quote=value;form.pending=nil;renderSale(s,form)
+        end,function(reply) C.Message(C.Text('menu_horseSaleFailed',reply.code)) end)
+    end
+    local mapping=Horses.ModelToBreedMap[horse.modelKey]
+    local breed=mapping and Horses.BreedCatalog[mapping.breed]
+    local coat=breed and breed.colors[horse.modelKey]
+    if coat and tonumber(coat.currency)==3 then
+        add('arrows','sale-currency',{label=C.Text('menu_currency'),value=q.currency,disabled=form.pending==true,options={
+            {label=C.Text('menu_cash'),value='dollars'},{label=C.Text('menu_gold'),value='gold'}}},function(event)
+                if not s.busy and not form.pending then quote(event.value) end
+        end)
+    end
+    local shown=C.Text(q.currency=='dollars' and 'menu_cashPrice' or 'menu_goldPrice',q.amount/100)
+    add('textdisplay','horse-sale-price',{value=C.Text('menu_horseSaleOffer',shown)})
+    add('textdisplay','horse-sale-notice',{value=C.Text('menu_horseSaleKeepTack')})
+    if form.pending then add('textdisplay','horse-sale-pending',{value=C.Text('menu_horseSalePending')}) end
+    add('button','refresh',{label=C.Text('menu_refresh'),slot='footer',row='sale-actions'},function()
+        if s.busy then return end
+        if form.pending then renderSale(s,form) else quote(q.currency) end
+    end)
+    add('button','horse-sale',{label=C.Text('menu_horseSaleConfirm'),slot='footer',row='sale-actions',
+        confirm={title=C.Text('menu_horseSaleConfirm'),message=C.Text('menu_horseSaleSummary',q.name,shown),
+            confirmLabel=C.Text('menu_horseSaleSell'),cancelLabel=C.Text('menu_cancel')}},function()
+        if s.busy then return end
+        request(s,'horse_sale_confirm',{operationId=q.operationId,amount=q.amount,currency=q.currency},function(value)
+            if value.state~='sold' then form.pending=true;renderSale(s,form);return end
+            if s.selectedHorse and s.selectedHorse.horseId==q.horseId then s.selectedHorse=nil end
+            request(s,'roster',{},function(data) s.data=data;s.expanded=nil;restoreRoster(s) end)
+            C.Message(C.Text('menu_horseSaleComplete'))
+        end,function(reply)
+            -- Keep the original quote/operation on an uncertain acknowledgement.
+            form.pending=reply.code~='quote_expired' and reply.code~='price_conflict' and reply.code~='revision_conflict'
+            renderSale(s,form);C.Message(C.Text('menu_horseSaleFailed',reply.code))
+        end)
+    end)
+    add('button','back',{label=C.Text('menu_back'),slot='footer',row='actions'},function()
+        if not s.busy then renderDetails(s,horse) end
+    end)
+    add('button','close',{label=C.Text('menu_close'),slot='footer',row='actions'},function() close(s) end)
+    activate(s,id,old)
+end
+
 renderDetails = function(s, horse)
     if state ~= s then return end
     s.detail = horse; s.renameForm = nil
@@ -766,17 +878,52 @@ renderDetails = function(s, horse)
     C.Text('menu_notRecorded'))
     field('stamina-core', 'savedStamina',
         condition and (tostring(condition.staminaCore) .. '%') or C.Text('menu_notRecorded'))
-    -- Existing Feather schema has no persisted progression ranks. Catalog base
-    -- values are explicitly labelled; never invent trained stats or core defaults.
+    if horse.bonding then
+        section='bonding-title'
+        add('accordion',section,{label=C.Text('menu_bonding'),value=true})
+        field('bonding-xp','bondingXp',horse.bonding.xp)
+        if Stables.HorseBonding then
+            local level,nextXp=Stables.HorseBonding.Describe(horse.modelKey,horse.bonding.xp)
+            field('bonding-level','bondingLevel',tostring(level)..'/4')
+            if nextXp then add('textdisplay','bonding-next',{section=section,value=C.Text('menu_bondingNext',nextXp)}) end
+        end
+    end
+    local training=horse.bonding and horse.bonding.training
+    if training then
+        section='training-title'
+        add('accordion',section,{label=C.Text('menu_training'),value=false})
+        field('training-level','trainingLevel',training.level)
+        for _,key in ipairs({'health','stamina','handling','acceleration','speed'}) do
+            field('training-'..key,key,('%d/10 (+%d)'):format(training.ranks[key]+1,training.ranks[key]-training.base[key]))
+        end
+        add('textdisplay','training-next',{section=section,value=training.level>=training.capacity and C.Text('menu_trainingCapped')
+            or C.Text('menu_trainingNext',(training.level+1)*training.xpPerLevel)})
+    end
     baseStats(add, coat, false)
     rotation(add)
+    if horse.availability=='stored' and Config.sales and Config.sales.tradingEnabled then
+        add('button','horse-trade-open',{label=C.Text('menu_horseTradeReview'),slot='footer',row='horse-actions'},function()
+            if not s.busy then openHorseTrade(s,horse) end
+        end)
+    end
     if horse.availability == 'stored' then
-        add('button', 'rename', { label = C.Text('menu_rename'), slot = 'footer', row = 'details-actions' },
-            function() beginRename(s, horse) end)
+        if Config.sales and Config.sales.enabled then
+            add('button','horse-sale-open',{label=C.Text('menu_horseSaleSell'),slot='footer',row='horse-actions'},function()
+                if s.busy then return end
+                local currency=coat and tonumber(coat.currency)==2 and 'gold' or 'dollars'
+                request(s,'horse_sale_quote',{horseId=horse.horseId,currency=currency},function(q)
+                    renderSale(s,{horse=horse,quote=q})
+                end,function(reply) C.Message(C.Text('menu_horseSaleFailed',reply.code)) end)
+            end)
+        end
     end
     add('button', 'refresh', { label = C.Text('menu_refresh'), slot = 'footer', row = 'details-actions' }, function()
         request(s, 'preview', { horseId = horse.horseId }, function(value) renderDetails(s, value) end)
     end)
+    if horse.availability == 'stored' then
+        add('button', 'rename', { label = C.Text('menu_rename'), slot = 'footer', row = 'details-actions' },
+            function() beginRename(s, horse) end)
+    end
     add('button', 'back', { label = C.Text('menu_back'), slot = 'footer', row = 'actions' }, function()
         if s.busy then return end
         P.StopRotation(); render(s, s.data)
@@ -912,6 +1059,8 @@ AddEventHandler('feather-core:locale:changed', function()
                 renderCheckout(s,s.checkout)
             elseif s.catalog then
                 renderCatalog(s, s.catalog.breed, s.catalog.model)
+            elseif s.saleForm then
+                renderSale(s,s.saleForm)
             elseif s.renameForm then
                 renderRename(s, s.renameForm)
             elseif s.detail then

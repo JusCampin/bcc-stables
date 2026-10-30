@@ -36,6 +36,11 @@ RegisterNetEvent('bcc-stables:feed:result',function(v)
         end
         local c=v.value.condition
         if v.value.state=='applied' and c then C.Message(C.Text('menu_feedSaved',c.healthCore,c.staminaCore,c.revision)) end
+        local xp=v.value.bonding
+        if xp and Stables.HorseBonding then Stables.HorseBonding.NotifyLevel(xp) end
+        if xp and xp.amount and xp.amount>0 and Config.bonding and Config.bonding.showXpMessage~=false then
+            C.Message(C.Text('menu_bondingEarned',xp.amount,C.Text(brush and 'menu_bondingReason_brush' or 'menu_bondingReason_feed'),xp.xp))
+        end
     else
         local keys={care_full='feedFull',care_food_missing='feedMissing',care_uninitialized='feedUninitialized',
             care_ineligible='feedBeside',care_disabled='feedDisabled',care_busy='feedBusy',care_stale='feedCancelled',

@@ -41,6 +41,7 @@ local function saveStopProofs()
 end
 local function cancel(r)
     r.cancelled = true
+    if Stables.Bonding then Stables.Bonding.Forget(r) end
     if r.care then r.care.cancelled=true end
     if C.CancelMovement then C.CancelMovement(r) end
     TriggerClientEvent('bcc-stables:call:cancel', r.session.source, r.id)
@@ -213,7 +214,7 @@ function C.Call(source)
     local called,result = pcall(function()
         local previous=records[session.characterId]
         if previous then
-            if previous.cancelled or previous.phase=='cleanup_pending' then
+            if previous.flee or previous.cancelled or previous.phase=='cleanup_pending' then
                 return F.Error('cleanup_pending','Previous horse cleanup is still completing.')
             end
             if C.IsDistant(session)~=true then return F.Error('horse_busy','The current horse is nearby or not ready for relocation.') end
@@ -319,12 +320,15 @@ function C.Bind(source, p)
             or not position(source) or not same(r) then return F.Error('stale_call','Horse authority changed during binding.') end
         local tack=Stables.Tack and Stables.Tack.Loadout(session,r.horse.horseId) or F.Ok({})
         if not tack.ok then return tack end
-        local bound=R.Bind(session,r.id,observation(r)); if not bound.ok then return bound end
+        local initializeStats=Stables.Bonding and Stables.Bonding.NeedsStats(owned.value.bonding)
+        local bound=R.Bind(session,r.id,observation(r),false,initializeStats); if not bound.ok then return bound end
         if not running or draining or r.cancelled or not F.IsCurrent(session) or not same(r)
             or not position(source) or GetConvar(PROCESS,'')~=epoch then return F.Error('stale_call','Bound horse requires cleanup.') end
+        r.tack=tack.value
+        r.bonding=bound.value.bonding or owned.value.bonding
         r.phase='active'
         r.requiredConditionRevision=owned.value.condition and owned.value.condition.revision or 0
-        return F.Ok({generationId=r.id,horseId=r.horse.horseId,state='active',netId=r.netId,condition=owned.value.condition,tack=tack.value})
+        return F.Ok({generationId=r.id,horseId=r.horse.horseId,state='active',netId=r.netId,condition=owned.value.condition,tack=tack.value,bonding=r.bonding})
     end)
     r.busy=false
     if not called then result=F.Error('call_outcome_unknown','Binding interrupted; the call remains reserved.') end
@@ -358,11 +362,16 @@ function C.OccupancyResult(source,p)
     return F.Error('stale_call','Occupancy ticket expired or its simulator changed.')
 end
 
-function C.Store(source,relocationGeneration)
+function C.Store(source,relocationGeneration,expectedGeneration,flee)
     local captured=F.RequireSession(source); if not captured.ok then return captured end
     local session=captured.value
     local r=records[session.characterId]
     if not r then return F.Error('call_not_observed','No live horse observer; saved identities will not be deleted.') end
+    if expectedGeneration and r.id~=expectedGeneration then return F.Error('stale_call','The target horse changed; current horse retained.') end
+    if flee then
+        if not Config.stable.fleeEnabled then return F.Error('flee_disabled','Horse flee is disabled.') end
+        if r.flee then return F.Ok({generationId=r.id,state='fleeing'}) end
+    end
     if r.care then r.care.cancelled=true; return F.Error('horse_care_busy','Feeding is cancelling; retry after it finishes.') end
     if r.busy or r.session.sessionId~=session.sessionId then return F.Error('busy','A horse operation is finishing.') end
     if r.cancelled then return cleanup(r) end
@@ -396,6 +405,12 @@ function C.Store(source,relocationGeneration)
     if relocationGeneration and (r.id~=relocationGeneration or C.IsDistant(session)~=true) then
         return F.Error('horse_nearby','Relocation distance changed; the current horse was retained.')
     end
+    if flee then
+        r.flee={endsAt=GetGameTimer()+10000,retryAt=0}
+        local started=Stables.Whistle and Stables.Whistle.Flee(r)
+        if not started or not started.ok then r.flee=nil;return started or F.Error('movement_unavailable','Flee movement is unavailable.') end
+        return F.Ok({generationId=r.id,state='fleeing'})
+    end
     return cleanup(r)
 end
 
@@ -421,7 +436,22 @@ function C.Tick()
                     or GetConvar(PROCESS,'')~=epoch or (r.phase=='waiting' and GetGameTimer()-r.started>=30000)
                     or (r.entity and (not exists(r.entity) or not same(r))) then cancel(r) end
                 if r.cancelled then cleanup(r) end
+                if not r.cancelled and r.flee and GetGameTimer()>=r.flee.retryAt then
+                    r.flee.retryAt=GetGameTimer()+500
+                    local target=GetPlayerPed(r.session.source)
+                    local a,b=exists(target) and GetEntityCoords(target),GetEntityCoords(r.entity)
+                    if GetGameTimer()>=r.flee.endsAt or a and b and (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2>40000 then
+                        local stored=C.Store(r.session.source,nil,r.id)
+                        if not stored.ok and r.flee then
+                            if stored.code=='horse_occupied' then
+                                r.flee=nil
+                                if C.CancelMovement then C.CancelMovement(r) end
+                            else r.flee.retryAt=GetGameTimer()+1000 end
+                        end
+                    end
+                end
                 if not r.cancelled and C.MovementTick then C.MovementTick(r) end
+                if not r.cancelled and Stables.Bonding then pcall(Stables.Bonding.Tick,r) end
             end)
             if not called then cancel(r) end
         end
@@ -549,17 +579,23 @@ function C.Install()
         {'request',function(_,source) return C.Call(source) end,true},
         {'accept',function(p,source) return C.Accept(source,p) end},
         {'bind',function(p,source) return C.Bind(source,p) end},
-        {'store_current',function(_,source) return C.Store(source) end,true},
+        {'store_current',function(p,source) return C.Store(source,nil,p.generationId,p.flee) end,true},
         {'store_check_result',function(p,source) return C.OccupancyResult(source,p) end}
     }
     for _,entry in ipairs(routes) do
         local action,handler,empty=entry[1],entry[2],entry[3]
         local result=F.Call('feather-core','RegisterRpc','stables.horses.call.'..action..'.v1',handler,{
             contract=1,direction='client_to_server',requireCharacter=action~='store_check_result',
-            windowMs=2000,maxCalls=2,maxPayloadBytes=empty and 16 or 384,maxDepth=2,maxNodes=10,
+            windowMs=2000,maxCalls=2,maxPayloadBytes=action=='store_current' and 96 or empty and 16 or 384,maxDepth=2,maxNodes=10,
             validatePayload=function(p)
                 if type(p)~='table' then return false end
-                if empty then return next(p)==nil end
+                if empty then
+                    if action=='store_current' and p.generationId~=nil then
+                        for key in pairs(p) do if key~='generationId' and key~='flee' then return false end end
+                        return F.IsUuid(p.generationId) and (p.flee==nil or p.flee==true)
+                    end
+                    return next(p)==nil
+                end
                 if not F.IsUuid(p.generationId) then return false end
                 for key in pairs(p) do
                     if key~='generationId' and (action=='bind' and key~='netId' or action=='accept' and key~='observerId'

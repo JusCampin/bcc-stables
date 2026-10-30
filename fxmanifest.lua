@@ -40,8 +40,10 @@ client_scripts {
     'client/core/locale.lua',
     'client/core/dataview.lua',
     'client/horse/controller.lua',
+    'client/horse/bonding.lua',
     'client/horse/whistle.lua',
     'client/horse/feeding.lua',
+    'client/horse/target_menu.lua',
     'client/tack/controller.lua',
     'client/ui/preview.lua',
     'client/ui/stable.lua'
@@ -56,9 +58,13 @@ server_scripts {
     'server/horse/whistle.lua',
     'server/horse/checkout.lua',
     'server/horse/feeding.lua',
+    'server/horse/bonding.lua',
     'server/tack/feather.lua',
     'server/tack/resale.lua',
     'server/tack/trade.lua',
+    'server/horse/saddlebags.lua',
+    'server/horse/resale.lua',
+    'server/horse/trade.lua',
     'server/ui/stable.lua',
     'server/core/boot.lua'
 }

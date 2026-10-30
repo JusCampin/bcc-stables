@@ -57,7 +57,7 @@ RegisterNetEvent('bcc-stables:movement:execute', function(p)
             if not claim.ok or type(v) ~= 'table' or v.generationId ~= p.generationId or v.sequence ~= p.sequence
                 or not C.Uuid(v.observerId) or type(v.netId) ~= 'number' or type(v.targetNet) ~= 'number'
                 or type(v.modelKey) ~= 'string' or type(v.remainingMs) ~= 'number' or v.remainingMs < 0 or v.remainingMs > 30000
-                or (v.mode ~= 'follow' and v.mode ~= 'approach' and v.mode ~= 'stop') then
+                or (v.mode ~= 'follow' and v.mode ~= 'approach' and v.mode ~= 'stop' and v.mode ~= 'flee') then
                 return
             end
             w.ticket = v
@@ -67,13 +67,17 @@ RegisterNetEvent('bcc-stables:movement:execute', function(p)
                 ClearPedTasks(w.horse)
                 return
             end
-            if v.mode == 'follow' then
+            if v.mode == 'flee' then
+                ClearPedTasksImmediately(w.horse,false,false)
+                Citizen.InvokeNative(0x22B0D0E37CCB840D,w.horse,w.target,100.0,v.remainingMs,6,3.0)
+                SetPedKeepTask(w.horse,true)
+            elseif v.mode == 'follow' then
                 Citizen.InvokeNative(0x304AE42E357B8C7E, w.horse, w.target, 2.0, -3.0, 0.0, 2.0, v.remainingMs, 3.0, true,
                     false, false, false, false, false)
             else
                 TaskGoToEntity(w.horse, w.target, -1, 10.2, 2.0, 0.0, 0)
             end
-            C.Message(v.mode == 'follow' and 'horse following.' or 'horse approach requested.')
+            C.Message(v.mode=='flee' and 'horse fleeing.' or v.mode == 'follow' and 'horse following.' or 'horse approach requested.')
             local deadline = GetGameTimer() + v.remainingMs
             while workers[p.generationId] == w and not w.cancelled and GetGameTimer() < deadline and valid(w) do
                 if v.mode == 'approach' then

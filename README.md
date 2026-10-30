@@ -1,5 +1,35 @@
 # bcc-stables
 
+Saved bonding XP is implemented behind `Config.bonding.enabled` (default false),
+with `database/feather_bonding.sql`. Riding/leading and successful Inventory care
+award saved XP; native bonding restores on recall and follows the horse through
+trades. Baseline riding/leading/care, cooldown, cancellation and restart restoration
+have passed live testing. Migrated-simulator XP and higher bonding unlocks remain pending.
+
+Permanent stat rewards are implemented behind `Config.bonding.statRewardsEnabled`
+(default false). Install `database/feather_progression.sql` on existing databases.
+Every 1,000 XP awards one rank in health/stamina/handling/acceleration/speed order,
+skipping capped stats. Each stat earns at most +2, never above native rank 9.
+Starting stats, XP interval and bonus cap are pinned per horse on initialization;
+later catalog/config edits do not rewrite existing trained horses. Rank updates
+retain actual depleted cores. Permanent Progression in Stats & Details shows
+saved effective ranks and the next milestone. The first earned rank, displayed
+bonus, restart persistence and cleanup have passed live testing. Native core
+preservation at the instant of a rank change and migrated-simulator stat application
+remain pending live checks. Other world-care XP remains deferred.
+
+Player horse trades are implemented behind `Config.sales.tradingEnabled` (default
+false), with `database/feather_horse_trades.sql` and scoped provider configuration.
+Stats & Details -> Trade Horse supports free/paid offers and one optional checkbox
+for all equipped tack plus bag contents. Contents are collapsed in the shared
+Trades tab. Original identities/provenance are retained; paid package and free horse-only
+handover have passed live testing.
+
+Stable horse buy-back is implemented behind `Config.sales.enabled` (default false).
+Install `database/feather_horse_sales.sql` before enabling it. The existing catalog
+resale multiplier is preserved; tack and saddlebag contents stay with the seller.
+Stable buy-back and its dedicated review page have passed live testing.
+
 > Feather refactor in progress. The active manifest currently enables calling the
 > existing selected horse, riding, native leading, whistle approach/follow and storing it,
 > plus Menu v2 roster, catalog browsing, selection, preview, details and renaming.
@@ -231,4 +261,10 @@ The `stats` JSON column stores progression ranks. Current health and stamina cor
 
 - [bcc-stables](https://github.com/BryceCanyonCounty/bcc-stables)
 
-Tack categories: saddles, saddlecloths, stirrups, saddle horns, saddlebags, bedrolls, bridles, holsters, horseshoes, masks, manes, tails and mustaches. Saddle-dependent bags/bedrolls/holsters remain independent pieces; horns/stirrups remain saddle assemblies. Bags currently provide appearance only, not inventory capacity. See docs/FEATHER_INTEGRATION.md for the item seed and Inventory collection allowlist update.
+Tack categories: saddles, saddlecloths, stirrups, saddle horns, saddlebags, bedrolls, bridles, holsters, horseshoes, masks, manes, tails and mustaches. Saddle-dependent bags/bedrolls/holsters remain independent pieces; horns/stirrups remain saddle assemblies. Bag storage is bound to the unique saddlebag piece when Config.saddlebags.enabled is true. See docs/FEATHER_INTEGRATION.md for the item seed and Inventory collection allowlist update.
+
+Saddlebag storage follows the unique bag piece (Config.saddlebags: 50 slots / 250 weight by default). Filled bags may be traded with explicit contents disclosure; stable buy-back requires empty bags. Native Cargo access, contents persistence/movement and filled-bag trades have passed live testing. See docs/FEATHER_INTEGRATION.md for Inventory policy/deployment.
+
+Native target-menu Flee now uses the same generation-fenced store/clear flow as HorseStore, respecting Config.stable.fleeEnabled and retaining condition and saddlebag contents. See docs/FEATHER_INTEGRATION.md for the target_menu.lua manifest update and live test.
+
+Target-menu Flee uses the original run-away native, followed by server Store cleanup at ten seconds or over 200 metres. Normal HorseStore remains immediate; occupancy is rechecked before deletion.

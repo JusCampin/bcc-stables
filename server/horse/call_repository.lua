@@ -166,9 +166,9 @@ function R.Reserve(session, horse, generationId, processEpoch)
         if not saved or saved.availability ~= 'stored' or saved.biological_state ~= 'alive'
             or saved.origin_operation_id ~= horse.operationId or tonumber(saved.revision) ~= horse.projectionRevision
             or saved.asset_id ~= horse.assetId or saved.model_key ~= horse.modelKey
-            or saved.registration_state ~= 'linked' or saved.registration_character ~= session.characterId
+            or saved.registration_state ~= 'linked' or saved.registration_character ~= saved.operation_character
             or saved.registration_horse ~= horse.horseId or saved.operation_state ~= 'fulfilled'
-            or saved.operation_character ~= session.characterId or saved.operation_horse ~= horse.horseId then return changed() end
+            or not F.IsUuid(saved.operation_character) or saved.operation_horse ~= horse.horseId then return changed() end
         writeBatch(tx, {DB.stmt([[INSERT INTO fs_call_leases
             (generation_id,character_id,horse_id,operation_id,asset_id,model_key,session_id,source_id,selection_revision,state,revision)
             VALUES (?,?,?,?,?,?,?,?,?,'submitting',1)]], generationId, session.characterId, horse.horseId,
@@ -179,7 +179,7 @@ function R.Reserve(session, horse, generationId, processEpoch)
     end, session)
 end
 
-function R.Bind(session, generationId, observation, cleanupOnly)
+function R.Bind(session, generationId, observation, cleanupOnly, initializeStats)
     if type(session) ~= 'table' or not F.IsUuid(generationId) or type(observation) ~= 'table'
         or not F.IsUuid(observation.observerId) or observation.generationId ~= generationId
         or type(observation.netId) ~= 'number' or observation.netId < 1 or observation.netId > 2147483647
@@ -196,12 +196,17 @@ function R.Bind(session, generationId, observation, cleanupOnly)
             local allowed = careClear(tx, session.characterId); if not allowed.ok then return allowed end
         end
         local projected = project(tx, v, 'active'); if not projected.ok then return projected end
+        local bonding
+        if initializeStats and not cleanupOnly and Stables.Bonding and Stables.Bonding.StatRewardsEnabled() then
+            local saved=Stables.Bonding.EnsureStats(tx,v.horse_id,v.model_key)
+            if not saved.ok then return saved end;bonding=saved.value
+        end
         writeBatch(tx, {DB.stmt([[INSERT INTO fs_call_bindings
             (generation_id,observer_id,network_id,initial_owner,routing_bucket) VALUES (?,?,?,?,0)]],
             generationId, observation.observerId, observation.netId, session.source),
             DB.stmt("UPDATE fs_call_leases SET state='active',revision=2 WHERE generation_id=? AND state='submitting' AND revision=1", generationId)})
         v.state, v.revision = 'active', 2
-        return view(v)
+        local result=view(v);result.value.bonding=bonding;return result
     end, not cleanupOnly and session or nil)
 end
 

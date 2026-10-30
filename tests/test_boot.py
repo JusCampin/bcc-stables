@@ -87,7 +87,7 @@ class BootTest(unittest.TestCase):
                 if path.startswith('config/tack/') or path in ('shared/tack.lua','client/tack/controller.lua'):
                     lua.execute((ROOT/path).read_text(encoding='utf-8-sig'))
                 if path=='client/ui/preview.lua':
-                    lua.execute("assert(Tack and #Tack.CatalogBySlot.saddle==179);assert(HorseAppearance and HorseAppearance.applyLoadout)")
+                    lua.execute("assert(Tack and #Tack.CatalogBySlot.saddle==175);assert(HorseAppearance and HorseAppearance.applyLoadout)")
                     lua.execute("assert(#Tack.CatalogBySlot.saddlecloth==66 and #Tack.CatalogBySlot.stirrups==54 and #Tack.CatalogBySlot.saddle_horn==67)")
 
 

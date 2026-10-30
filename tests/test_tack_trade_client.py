@@ -60,6 +60,13 @@ class TradeClientTest(unittest.TestCase):
         self.assertIn('John Doe (Player 1) to Jane Doe (Player 2)',g.labels['trade-party-1'])
         self.assertIn('John Doe (Player 1) to Jane Doe (Player 2)',g.specs['trade-accept-1'].confirm.message)
 
+    def test_trade_discloses_included_storage_contents_before_consent(self):
+        self.lua.execute("tradeQuote.items[1].contents=3;tradeData.offers={tradeQuote}")
+        self.h.open();self.lua.execute('TradeTab()')
+        g=self.lua.globals()
+        self.assertIn('3 occupied slots',g.labels['trade-items-1'])
+        self.assertIn('Contents transfer',g.specs['trade-accept-1'].confirm.message)
+
     def test_disabled_trade_page_explains_configuration(self):
         self.lua.execute('tradeData.available=false')
         self.h.open();self.lua.execute('TradeTab()')

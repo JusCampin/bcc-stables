@@ -45,6 +45,10 @@ local function start()
         local probe=Stables.Feeding.Probe();if not probe.ok then return probe end
     end
     if Stables.Tack then local tack=Stables.Tack.Start();if not tack.ok then return tack end end
+    if Stables.Saddlebags then local bags=Stables.Saddlebags.Start();if not bags.ok then return bags end end
+    if Stables.HorseResale then local sales=Stables.HorseResale.Start();if not sales.ok then return sales end end
+    if Stables.HorseTrade then local trades=Stables.HorseTrade.Start();if not trades.ok then return trades end end
+    if Stables.Bonding then local bonding=Stables.Bonding.Start();if not bonding.ok then return bonding end end
     if Stables.Feeding then
         local feed=Stables.Feeding.Start();if not feed.ok then return feed end
     end
@@ -62,7 +66,8 @@ RegisterCommand('BccStablesStatus',function(source)
     if source~=0 then return end
     print('[bcc-stables] '..json.encode({state=health.state,code=health.code,
         schemaVersion=health.schemaVersion,features=health.features,calls=Stables.HorseController.Status(),purchases=Stables.Checkout and Stables.Checkout.Status() or nil,
-        tack=Stables.Tack and Stables.Tack.Status() or nil}))
+        tack=Stables.Tack and Stables.Tack.Status() or nil,horseSales=Stables.HorseResale and Stables.HorseResale.Status() or nil,
+        horseTrades=Stables.HorseTrade and Stables.HorseTrade.Status() or nil,bonding=Stables.Bonding and Stables.Bonding.Status() or nil}))
 end,true)
 CreateThread(function()
     local called,result=pcall(start)

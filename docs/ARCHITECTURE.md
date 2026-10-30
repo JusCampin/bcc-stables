@@ -231,3 +231,245 @@ core exports for parent ownership and availability, and request foal creation th
 dedicated core export rather than inserting directly into `bcc_player_horses`.
 
 All thirteen original tack categories share the existing PieceSlots policy and catalog. needsSaddle marks independent saddle-dependent horse assignments; requiresSaddle marks anchored horn/stirrup assembly parts. Equipment discovery now reads every non-assembly PieceOrder category. No new provider contracts or database tables.
+
+## Saddlebag storage - ready for live acceptance
+
+Storage belongs to the saddlebag unique Inventory instance, not a horse/character.
+Uses normal Inventory container/UI/slot/weight transactions with defaults 50 slots,
+250 weight in Config.saddlebags. No saddlebag item recreation or content copying
+on equip, horse store/recall, or player transfer. NPC buy-back requires empty bags.
+Player trade summaries and confirmations disclose occupied storage slots; the
+recipient receives the same bag and all contents. Content count participates in
+trade-term rechecks. Existing saddle styles 19/27/47/48 removed, per owner confirmation
+that none are owned; the remaining original style labels are not renumbered.
+
+Inventory adds scoped RegisterCollectionStorage/GetCollectionStorage/
+OpenCollectionStorage exports. TrustedCharacterCollections stables.tack.v1 policy
+must include storageItems={horse_saddlebag=true}. The provider lazily creates the
+normal container and durably maps its ID in inventory_collection_storage. Core
+current character, locked item custody and the current Stables bound-horse predicate
+are rechecked for reads/mutations, including after the normal open-session shortcut.
+The predicate checks current generation/session, exact equipped bag, bucket/proximity
+and active call; opening additionally uses the existing network-owner occupancy
+check. Thus no network-control assumption on the owner's client. Closing/storing,
+relocating, ownership changes, provider stop or leaving range denies subsequent
+operations; the Inventory UI closes within the existing new one-second check of
+actively opened item containers. No all-bag/world polling and no new proof commands.
+Saddlebag policy remains registered for trade/sale inspection when opening is disabled.
+Ordinary carried/collection/storage APIs otherwise retain their established behavior.
+
+Native PP_HORSE_ITEMS=28/PP_MODE_HIDE=1 is hidden for this bound horse; a localized
+bag-only prompt uses INPUT_OPEN_SATCHEL_HORSE_MENU (B), within three metres on foot.
+Native horse-weapons prompt types are untouched. Prompt sleeps 500ms away/in menus
+and checks each frame only beside an eligible bag-equipped horse. Native prompt
+suppression/coexistence still needs live confirmation.
+Enum reference: https://github.com/Halen84/RDR3-Native-Flags-And-Enums/tree/main/ePromptType
+
+Offline: 341 Stables tests; 37 Inventory transaction tests and complete Inventory
+Lua regression/syntax suite pass. Tests cover lazy same-container registration,
+capacity settings, stacked-row slot disclosure, current custody/live predicate,
+resource/session changes, empty-only retirement with receipt rollback, content
+persistence across ownership changes, source-only prompt requests, bag-only UI,
+nonempty sale quote refusal and trade consent disclosure. Live RedM prompt behavior,
+50-slot/250-weight limit display/enforcement and multiplayer filled-bag transfer
+remain pending. Existing Inventory capacity tests pass, but no new live capacity
+claim is made. No new version bump; no commit/push/PR publication in this task.
+
+Live saddlebag storage acceptance (2026-10-29): user confirmed all requested checks working, including capacity, content persistence/store-recall and moving bags between horses, nonempty resale refusal, filled-bag trade disclosure/recipient access, and no-bag/horse-weapons behavior. No live concurrency fault injection claimed.
+
+Native Cargo prompt update: custom UiPrompt registration/group/deletion removed. Bound horse PP_HORSE_ITEMS=28 hide flag now follows absence of its equipped saddlebag; existing native INPUT_OPEN_SATCHEL_HORSE_MENU input (normal and disabled-control path) opens the same source-only server RPC. Current horse/proximity/on-foot/NUI gates and server Inventory authorization unchanged. Native horse-weapons prompt types untouched. Fifteen horse-client and two cargo-input regression tests pass; native Cargo visibility/input change pending live confirmation. Copy client/horse/controller.lua and client/horse/saddlebags.lua only. Store active horse/close menus, restart bcc-stables; no refresh/config/SQL/provider restart.
+
+## Native horse target-menu Flee - ready for live test (2026-10-29)
+
+Shared Cargo event reader renamed client/horse/target_menu.lua; manifest replaces
+client/horse/saddlebags.lua, avoiding a second frame/event loop. Completed
+EVENT_PLAYER_PROMPT_TRIGGERED type 33 for the exact active horse dispatches
+H.Store(currentGeneration). Works without saddlebags and respects existing
+Config.stable.fleeEnabled. Native Flee visibility follows that flag independently
+of Cargo. Cargo completion/animation unchanged. No new RPC or diagnostic command.
+
+The existing store_current RPC accepts an optional exact generation fence;
+empty normal command calls remain compatible. Client rejects a changed local
+horse before releasing lead; server rejects stale generation before care/occupancy/
+cleanup. Existing Store handles lead release, current simulator occupancy,
+saved condition, movement/care cancellation, Inventory access revocation and
+confirmed disappearance. No separate flee persistence or deletion path.
+
+Offline: all 351 Stables tests pass, including Flee without bags, disabled/foreign
+prompt refusal, one intent for duplicate same-frame events, exact generation
+payload validation, stale-generation retention and normal confirmed Store.
+Live native Flee/cleanup is pending. Expected player behavior: complete Flee in
+the native target menu; horse stores/clears, then whistle recalls exactly one.
+This update requests safe dismissal through Store; it adds no delayed/out-of-view
+runaway despawn policy.
+
+Required runtime copy:
+C:/coding/bcc-feather-scripts/bcc-stables/fxmanifest.lua -> bcc-stables/fxmanifest.lua
+C:/coding/bcc-feather-scripts/bcc-stables/client/horse/controller.lua -> bcc-stables/client/horse/controller.lua
+C:/coding/bcc-feather-scripts/bcc-stables/client/horse/target_menu.lua -> bcc-stables/client/horse/target_menu.lua
+C:/coding/bcc-feather-scripts/bcc-stables/server/horse/controller.lua -> bcc-stables/server/horse/controller.lua
+Existing setting: Config.stable.fleeEnabled=true (server config/settings.lua);
+no new configuration, SQL or Inventory/provider changes. Close Inventory, run
+BccStablesHorseStore in player F8 and confirm disappearance; copy files, then
+server console refresh followed by restart bcc-stables. Refresh is needed for
+the renamed script/manifest entry. Do not separately load the old saddlebags reader.
+Test whistle call, target horse, complete native Flee, confirm disappearance;
+whistle to recall one horse, verify native Cargo hold/animation still works if
+bags equipped. Finish with player F8 BccStablesHorseStore and disappearance.
+Docs/tests do not need copying.
+
+## Original run-away Flee restored - ready for live test (2026-10-29)
+
+User confirmed target-menu Flee safely stored/removed the horse, then requested
+original run-away behavior before disappearance. PP_HORSE_FLEE now sends a
+flee=true generation-fenced intent through existing store_current (normal empty
+Store commands remain immediate). Store checks the current simulator for occupancy
+and captures condition first, then marks a ten-second flee reservation and issues
+an existing movement ticket to the current network owner. Native execution uses
+original TaskSmartFleePed 0x22B0D0E37CCB840D with distance 100.0, remaining duration
+up to 10000ms, flags 6 and speed 3.0, plus SetPedKeepTask(true), from preserved
+client/horse/return.lua. No new polling thread/RPC/table; uses existing movement
+claim/cancel/replay fences and controller tick. Owner migration reissues with only
+the original deadline's remaining time. Repeated Flee does not extend the deadline.
+
+During fleeing: call/whistle replacement, care and bag access refuse; existing
+bag views lose live access. At ten seconds or >200m separation (500ms checks),
+Store rechecks occupancy, captures current cores and performs its original
+confirmed cleanup. A new rider retains the horse and cancels dismissal; unknown
+occupancy retries at one second without deleting it. Stop/logout still use existing
+safe cleanup. Saved condition, ownership and bag contents remain provider-owned.
+
+Offline: full 357 Stables tests pass, including exact native args, simulator
+execution, no early deletion/new generation, ten-second/200m cleanup, mid-flight
+owner migration with fixed deadline, disabled/repeated Flee, and rider retention.
+Native run-away presentation still awaits live confirmation. Earlier immediate
+Flee was live accepted; this entry supersedes its no-delay behavior only.
+
+Required copy, all under C:/coding/bcc-feather-scripts/bcc-stables, to matching
+server bcc-stables paths: client/horse/controller.lua, client/horse/target_menu.lua,
+client/horse/whistle.lua, server/horse/controller.lua, server/horse/whistle.lua,
+server/horse/saddlebags.lua, server/horse/feeding.lua. Player F8 BccStablesHorseStore,
+confirm disappearance and close Inventory. Copy, then server restart bcc-stables.
+No refresh/manifest/config/SQL/Inventory change for this update. Recall with
+whistle, target Flee, verify run-away then disappearance, recall exactly one and
+finish player F8 BccStablesHorseStore. Network-owner-2 presentation can be checked
+with the existing two-player setup when available, without a new proof command.
+
+
+## 2026-10-29 - Stable horse buy-back ready for live testing
+
+Implemented behind Config.sales.enabled (default false), with the existing
+Config.sales.purchasedHorsePriceMultiplier=0.70 and original whole-currency
+ceil rounding. This applies to catalog purchased horses, not wild/tamed sales.
+Stats & Details offers currency selection where the catalog permits it, review,
+then exact horse/name/price confirmation. No new test/proof command is required.
+
+Install database/feather_horse_sales.sql in the existing Feather database. It adds
+fs_horse_sales without changing the schema-11 ledger. Confirmed admission uses the
+character lock and changes stored -> selling, blocking call/tack/care reuse.
+Inventory's atomic equipment batch parks the saddle with its fitted horn/stirrups
+and clears all other horse assignments. Items, condition and saddlebag contents
+remain with the character. No tack item is destroyed or paid for again.
+Assets.RetireAsset ends canonical ownership; Economy.Issue pays once with the
+persisted sale identity. Existing checkout recovery resumes confirmed intentions
+while offline and even after sales are disabled. Lost replies retain the same
+identities. A definite retirement revision conflict cancels and restores stored
+availability, leaving tack safely in storage. Historical horse/registration/
+purchase records remain; terminal local availability=sold is excluded from the
+purchase capacity count, and only that horse's selection is cleared.
+
+Uses existing scoped stables.horse_sale Issue reason and assets.asset.manage
+service grants. No Inventory, Assets or Economy implementation/config change is
+needed if current reviewed provider configuration is already deployed.
+BccStablesStatus now includes horseSales enabled/recoveryAvailable/pending.
+Pending retirement/payout remains reserved rather than creating a new sale.
+
+Validation: 372 isolated automated tests pass, including sale replay, competing
+quotes, expired/changed terms, current calls, asset CAS conflict, offline/restart
+recovery, lost retirement/payout acknowledgements, final SQL rollback, freeing
+horse capacity, retained tack assembly/bag item, and menu review/confirmation.
+Actual provider/native multiplayer acceptance remains pending. Test using a
+horse intended for sale; successful confirmation permanently ends its ownership.
+
+Deploy required runtime files to the same relative paths in server resource
+bcc-stables: fxmanifest.lua; client/core/locale.lua; client/ui/stable.lua;
+server/core/boot.lua; server/horse/checkout.lua; server/horse/resale.lua;
+server/tack/feather.lua; server/ui/stable.lua.
+Merge Config.sales.enabled=true into the server config/settings.lua; retain the
+existing multiplier. Execute database/feather_horse_sales.sql once, then server
+console refresh, restart bcc-stables, BccStablesStatus. A refresh is required
+because the manifest adds server/horse/resale.lua. No full server restart.
+Live test: open stable -> My Horses -> Stats & Details -> Review Horse Sale;
+verify price/currency and confirm. Check exactly one payout, horse absent,
+tack/filled bags retained, saddle assembly reusable on another horse, and another
+purchase allowed at the horse limit. Refresh/reopen must not pay again.
+Documentation and tests are not deployment files.
+
+
+## 2026-10-29 - Player horse trades with optional equipped package
+
+Implemented, awaiting live acceptance. Config.sales.tradingEnabled defaults false.
+Stats & Details -> Trade Horse uses the shared Trades tab (tack offers remain
+available). One unchecked-by-default checkbox includes ALL equipped tack and bag
+contents. Total entered price covers horse + included package; zero is a free
+handover. Both players review horse/name, condition of each piece, character names,
+price and terms, then explicitly consent. Each bag's actual named contents and
+quantities appear in an initially collapsed accordion with its occupied-slot count.
+Lists use one text element per bag, avoiding one component per stored unit.
+Offers expire three minutes after creation. Equipment revisions/assignments and
+bag contents fingerprint are checked again before acceptance; same-count content
+changes invalidate an offer. Without the checkbox, all tack is released to the
+seller's existing stable collection, retaining fitted saddle assemblies/contents.
+
+A sorted character-admission transaction reserves the stored horse as trading and
+reserves recipient horse capacity. Checkout counts accepted incoming horses too.
+Existing tack trade payment/capture/refund helpers are shared, with separate exact
+horse trade reason codes and receipt namespaces. Assets.TransferOwnership moves
+the same horse/asset, using expected revision and expected seller; Inventory's
+existing atomic collection transfer moves included original instances and their
+assignments. Bags retain their existing attached container. No new item, horse,
+container or copy of contents is granted during handover. Original purchase and
+asset-registration provenance stay with the original purchaser; current canonical
+Assets owner and Stables current-owner projection authorize calls/roster afterward.
+Saved condition stays attached to the same horse. The seller's selected horse is
+cleared only if it is this horse, and an empty recipient selection adopts it.
+
+Confirmed settlement resumes through the existing checkout worker, including
+offline. Unknown debit/ownership/item/payout replies retain the same receipt keys.
+Definite ownership CAS refusal refunds the exact original debit before releasing
+reservation. Once ownership transferred, an Inventory problem retains a reserved,
+unusable horse and pending trade for recovery; it never refunds a possibly
+committed handover or reports completion. If recipient collection fills during
+settlement, freeing capacity permits recovery; payout waits for package transfer.
+BccStablesStatus includes horseTrades pending/recovery status. No extra proof or
+operator settlement commands were added.
+
+Database: run database/feather_horse_trades.sql in the existing Feather database;
+no schema-11 ledger modification. New server/horse/trade.lua is in fxmanifest.lua.
+Provider changes: Inventory GetCollectionStorage supports snapshot=true, returning
+contentsVersion=1, named grouped quantities and a deterministic 64-bit revision
+fingerprint covering every content instance ID, item, slot, revision and metadata.
+Only opt-in snapshots read full contents; ordinary access/count behavior is kept.
+Economy config adds exact horse_trade_payment reversal scope and horse_trade_sale
+Issue reason. Admin service policy adds assets.ownership.transfer for broker
+feather-assets -> principal bcc-stables; no player permission/wildcard added.
+
+Validation: 389 Stables tests pass, including 12 horse-trade settlement cases,
+received-horse call/bind preserving original provenance, all-13-slot package,
+checkbox false preservation, recipient review and collapsed contents. Inventory's
+38 Python tests and full Lua suite pass, including same-count contents changes.
+Economy full Lua suite passes. Admin 8 scoped asset-policy cases, payout scope
+checks and 19 wallet tests pass. Live provider/native multiplayer acceptance is
+pending; no claim of cross-provider ACID or MariaDB concurrency certification.
+Version bumps, commits, pushes and PRs were not performed.
+
+User previously confirmed the dedicated stable horse-sales page looks good.
+
+
+2026-10-29: Optional saved bonding uses one fs_horse_bonding row per horse, the existing controller tick, simulator-scoped observations and atomic care settlement. No idle sampling RPC, separate permanent monitor, XP-from-client API or permanent stat/core writer. Owned SQL joins XP in its existing statement. Full policy/limits/deployment/live gate are in FEATHER_INTEGRATION.md; 409 tests pass and live bonding acceptance is pending.
+
+
+2026-10-30: Permanent progression now extends the saved bonding service behind statRewardsEnabled. One nullable versioned JSON field pins starting ranks, interval, cap and applied level; XP/level/cursor share existing transactions. Initial bind initializes once, normal owned reads join saved progression, and current native simulators apply ranks while preserving observed depleted cores. The worker/RPC/manifest remain unchanged. 421 tests pass; live stat application/persistence is pending. See FEATHER_INTEGRATION.md for exact deployment and live gate.
+
+
+2026-10-30 commit preparation: the working tree since d3583b6 includes unique-piece saddlebag storage/native Cargo access, original-native Flee followed by safe cleanup, stable horse buy-back, free/paid player horse trades with optional equipped tack and bag contents, saved bonding XP and capped permanent stat rewards. All 421 automated Stables checks passed. User confirmed baseline progression reward/display/restart persistence and final disappearance; see the integration log for separate unverified native/migration gates. README now reflects those live results. Include the new runtime, SQL and test files alongside tracked changes; no version bump, staging, commit or push was performed.

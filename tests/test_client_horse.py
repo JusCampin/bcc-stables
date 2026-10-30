@@ -126,6 +126,47 @@ class ClientHorseTest(unittest.TestCase):
         self.assertTrue(self.lua.globals().tackApplied)
         self.assertEqual(self.lua.globals().reveals,1)
 
+    def test_native_cargo_visibility_follows_equipped_bags_without_changing_weapons(self):
+        for equipped in (False,True):
+            self.setUp()
+            self.lua.globals().withBags=equipped
+            self.lua.execute("""
+                Config.saddlebags={enabled=true}
+                local native=Citizen.InvokeNative
+                Citizen.InvokeNative=function(hash,a,b,c,d,e)
+                    if hash==0xA3DB37EDF9A74635 then
+                        assert(c~=45 and c~=46)
+                        if c==28 then assert(d==1);cargoHidden=e end
+                    end
+                    return native(hash,a,b,c,d,e)
+                end
+                local rpc=exports['feather-core'].CallRPC
+                exports['feather-core'].CallRPC=function(self,name,p,callback,...)
+                    return rpc(self,name,p,function(result)
+                        if name:find('.bind.',1,true) and withBags then result.value.tack={saddlebag={instanceId=186}} end
+                        callback(result)
+                    end,...)
+                end
+                HorseAppearance={applyLoadout=function() return true end}
+                CreateFromServer()
+            """)
+            self.assertEqual(self.lua.globals().cargoHidden,not equipped)
+
+    def test_target_menu_store_pins_generation_and_refuses_a_replaced_local_horse(self):
+        self.lua.execute("""
+            CreateFromServer()
+            local rpc=exports['feather-core'].CallRPC
+            exports['feather-core'].CallRPC=function(self,name,p,callback,...)
+                if name:find('.store_current.',1,true) then storeGeneration=p.generationId end
+                return rpc(self,name,p,callback,...)
+            end
+            assert(not Stables.Horse.Store('77777777-7777-4777-8777-777777777777'))
+            assert(storeGeneration==nil)
+            assert(Stables.Horse.Store(spec.generationId))
+            assert(storeGeneration==spec.generationId)
+            assert(Stables.Horse.Flee(spec.generationId))
+        """)
+
     def test_saved_sex_applies_after_settling_before_reveal(self):
         self.lua.execute("spec.gender='female';CreateFromServer()")
         self.assertEqual(self.lua.globals().sexValues[1],1)

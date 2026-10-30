@@ -96,7 +96,7 @@ local function transaction(character,body)
     return ok and committed==true and result or (result and not result.ok and result or bad())
 end
 local function eligible(session,r)
-    if not r or H.MovementRecord(session)~=r then return false,'care_not_ready' end
+    if not r or r.flee or H.MovementRecord(session)~=r then return false,'care_not_ready' end
     if r.care and r.care.cancelled then return false,'care_cancelled' end
     if r.movement then return false,'care_moving' end
     local ped=GetPlayerPed(session.source)
@@ -177,6 +177,9 @@ local function reserve(session,r,item,c)
     local q={kind=action..'_v1',action=action,id=id.id,characterId=session.characterId,horseId=r.horse.horseId,assetId=r.horse.assetId,
         before=c,after={healthCore=math.min(100,c.healthCore+health),staminaCore=math.min(100,c.staminaCore+stamina),
             revision=c.revision+1,policyRevision=c.policyRevision}}
+    if Stables.Bonding and Stables.Bonding.Enabled() then
+        q.bondingReward=Stables.Bonding.Reward(action);q.bondingAt=os.time();q.bondingCooldown=Config.bonding.careCooldownSeconds
+    end
     if action=='feed' and q.before.healthCore==q.after.healthCore and q.before.staminaCore==q.after.staminaCore then return bad('care_full') end
     q.request={operationId=q.id,characterId=q.characterId,instanceId=item.id,definitionId=item.definition.id,
         expectedRevision=item.revision,itemName=item.definition.name,purpose=action=='brush' and 'stables.brush.v1' or 'stables.care.v1',
@@ -219,7 +222,7 @@ local function receipt(q,v)
     return true
 end
 local function view(q)
-    return {state=q.state,condition=q.state=='applied' and q.after or q.before,action=q.action,
+    return {state=q.state,condition=q.state=='applied' and q.after or q.before,action=q.action,bonding=q.bonding,
         remainingDurability=q.receipt and q.receipt.remainingDurability,broken=q.receipt and q.receipt.broken,
         maximumDurability=q.request.maximumDurability}
 end
@@ -228,6 +231,7 @@ function P.Settle(id,consume)
     if q.state=='applied' or q.state=='cancelled' then
         if (q.action=='brush' and not q.receipt) or (q.receipt and (not receipt(q,q.receipt)
             or (q.state=='cancelled')~=(q.receipt.state=='cancelled'))) then return bad() end
+        if q.bonding and Stables.Bonding then Stables.Bonding.Changed(q.horseId) end
         return F.Ok(view(q))
     end
     if q.state~='prepared' then return bad() end
@@ -237,7 +241,7 @@ function P.Settle(id,consume)
     local reply=inventory(method,q.request)
     if not reply.ok or not receipt(q,reply.value) then return bad() end
     local v=reply.value
-    return transaction(q.characterId,function(tx)
+    local settled=transaction(q.characterId,function(tx)
         local current=read(id,tx);if not current then return bad() end
         if current.state=='applied' or current.state=='cancelled' then return F.Ok(view(current)) end
         local slot=tx.one('SELECT operation_id FROM fs_care_slots WHERE horse_id=? FOR UPDATE',q.horseId)
@@ -249,12 +253,18 @@ function P.Settle(id,consume)
                 AND revision=? AND health_core=? AND stamina_core=? AND policy_revision=?]],c.healthCore,c.staminaCore,c.revision,
                 q.horseId,q.before.revision,q.before.healthCore,q.before.staminaCore,q.before.policyRevision)==1)
             assert(tx.exec('INSERT INTO fs_care_effects (operation_id,horse_id,condition_revision) VALUES (?,?,?)',id,q.horseId,c.revision)==1)
+            if q.bondingReward and q.bondingReward>0 then
+                if not Stables.Bonding then return bad('bonding_unavailable') end
+                local xp=Stables.Bonding.Care(tx,q);if not xp.ok then return xp end;q.bonding=xp.value
+            end
         end
         q.state,q.receipt=state,v
         assert(tx.exec('UPDATE fs_care_operations SET state=?,record_json=?,revision=1 WHERE operation_id=? AND state=\'prepared\'',state,json.encode(q),id)==1)
         assert(tx.exec('DELETE FROM fs_care_slots WHERE horse_id=? AND operation_id=?',q.horseId,id)==1)
         return F.Ok(view(q))
     end)
+    if settled.ok and settled.value.bonding and Stables.Bonding then Stables.Bonding.Changed(q.horseId) end
+    return settled
 end
 function P.Request(source,p,captured,ticket)
     captured=captured or F.RequireSession(source);if not captured.ok then return captured end

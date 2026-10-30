@@ -96,7 +96,7 @@ local function roster(s,cursor)
         FROM fs_character_stables stable INNER JOIN fs_horses h ON h.owner_character_id=stable.character_id
         INNER JOIN fs_asset_registrations r ON r.operation_id=h.origin_operation_id AND r.horse_id=h.horse_id
         WHERE stable.character_id=? AND h.biological_state='alive' AND r.state='linked'
-        AND r.character_id=stable.character_id AND r.asset_id IN (]]..table.concat(ids,',')..')',table.unpack(params))
+        AND r.asset_id IN (]]..table.concat(ids,',')..')',table.unpack(params))
     if not F.IsCurrent(s.session) or sessions[s.session.source]~=s then return F.Error('session_stale','Session changed.') end
     if type(rows)~='table' then return F.Error('database_unavailable','Roster unavailable.') end
     local entries={}
@@ -157,6 +157,9 @@ function M.Request(source,p,action)
     s.busy=true
     local ok,result=pcall(function()
         if action=='tack_trade_list' then return Stables.TackTrade.List(s) end
+        if action=='horse_trade_list' then return Stables.HorseTrade.List(s,p.horseId) end
+        if action=='horse_trade_offer' then return Stables.HorseTrade.Offer(s,p) end
+        if action=='horse_trade_respond' then return Stables.HorseTrade.Respond(s,p) end
         if action=='tack_trade_offer' then return Stables.TackTrade.Offer(s,p) end
         if action=='tack_trade_respond' then return Stables.TackTrade.Respond(s,p) end
         if action=='roster' then return roster(s,p.cursor) end
@@ -166,6 +169,8 @@ function M.Request(source,p,action)
             return renamed
         end
         if action=='purchase_quote' then return Stables.Checkout.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
+        if action=='horse_sale_quote' then return Stables.HorseResale.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
+        if action=='horse_sale_confirm' then return Stables.HorseResale.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='purchase_confirm' then return Stables.Checkout.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='tack_sale_quote' then return Stables.TackResale.Quote(s.session,s.site,p,function() return current(source,p)==s end) end
         if action=='tack_sale_confirm' then return Stables.TackResale.Confirm(s.session,s.site,p,function() return current(source,p)==s end) end
@@ -208,7 +213,7 @@ function M.Tick()
     end
 end
 function M.Install()
-    for _,action in ipairs({'open','roster','preview','select','close','ping','rename','purchase_quote','purchase_confirm',
+    for _,action in ipairs({'open','roster','preview','select','close','ping','rename','purchase_quote','purchase_confirm','horse_sale_quote','horse_sale_confirm','horse_trade_list','horse_trade_offer','horse_trade_respond',
         'tack_trade_list','tack_trade_offer','tack_trade_respond','tack_shop','tack_quote','tack_confirm','tack_equip','tack_sale_quote','tack_sale_confirm'}) do
         local result=F.Call('feather-core','RegisterRpc','stables.horses.call.menu_'..action..'.v1',function(p,source)
             return action=='open' and M.Open(source,p) or M.Request(source,p,action)
@@ -216,9 +221,13 @@ function M.Install()
             maxPayloadBytes=(action=='rename' or action=='purchase_quote') and 2048 or 512,maxDepth=2,maxNodes=12,validatePayload=function(p)
                 if type(p)~='table' then return false end
                 local allowed={token=true,site=true,horseId=true,revision=true,cursor=true}
+                if action=='horse_trade_offer' then allowed.recipientSource=true;allowed.includeTack=true;allowed.amount=true;allowed.currency=true end
+                if action=='horse_trade_respond' then allowed.operationId=true;allowed.accept=true;allowed.includeTack=true;allowed.amount=true;allowed.currency=true end
                 if action=='tack_trade_offer' then allowed.instanceId=true;allowed.recipientSource=true;allowed.amount=true;allowed.currency=true end
                 if action=='tack_trade_respond' then allowed.operationId=true;allowed.accept=true;allowed.amount=true;allowed.currency=true end
                 if action=='rename' then allowed.name=true end
+                if action=='horse_sale_quote' then allowed.currency=true end
+                if action=='horse_sale_confirm' then allowed.operationId=true;allowed.amount=true;allowed.currency=true end
                 if action=='purchase_quote' then allowed.modelKey=true;allowed.name=true;allowed.gender=true;allowed.currency=true end
                 if action=='purchase_confirm' then allowed.operationId=true;allowed.amount=true;allowed.currency=true end
                 if action=='tack_sale_quote' then allowed.instanceId=true end
@@ -227,6 +236,14 @@ function M.Install()
                 if action=='tack_confirm' then allowed.operationId=true;allowed.amount=true;allowed.currency=true end
                 if action=='tack_equip' then allowed.instanceId=true;allowed.expectedInstanceId=true;allowed.itemRevision=true;allowed.fromHorseId=true;allowed.slot=true;allowed.detach=true;allowed.fromSaddleId=true end
                 for key in pairs(p) do if not allowed[key] then return false end end
+                if action=='horse_trade_list' then return F.IsUuid(p.token) and (p.horseId==nil or F.IsUuid(p.horseId)) end
+                if action=='horse_trade_offer' then return F.IsUuid(p.token) and F.IsUuid(p.horseId) and type(p.includeTack)=='boolean'
+                    and F.IsRevision(p.recipientSource) and p.recipientSource>0 and F.IsRevision(p.amount) and p.amount<=1000000000
+                    and (p.currency=='dollars' or p.currency=='gold') end
+                if action=='horse_trade_respond' then return F.IsUuid(p.token) and F.IsUuid(p.operationId) and type(p.accept)=='boolean' and type(p.includeTack)=='boolean'
+                    and F.IsRevision(p.amount) and (p.currency=='dollars' or p.currency=='gold') end
+                if action=='horse_sale_quote' then return F.IsUuid(p.token) and F.IsUuid(p.horseId) and (p.currency=='dollars' or p.currency=='gold') end
+                if action=='horse_sale_confirm' then return F.IsUuid(p.token) and F.IsUuid(p.operationId) and F.IsRevision(p.amount) and (p.currency=='dollars' or p.currency=='gold') end
                 if action=='tack_trade_offer' then return F.IsUuid(p.token) and F.IsRevision(p.instanceId) and p.instanceId>0
                     and F.IsRevision(p.recipientSource) and p.recipientSource>0 and F.IsRevision(p.amount) and p.amount<=1000000000
                     and (p.currency=='dollars' or p.currency=='gold') end

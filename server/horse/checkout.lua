@@ -195,12 +195,13 @@ function P.Confirm(session,site,p,authorize)
         local row=read(q.id,q.characterId,tx); if not row.ok then return false end
         if row.value.state~='reserved' then return true end
         local count=tx.one([[SELECT
-            (SELECT COUNT(*) FROM fs_horses WHERE owner_character_id=? AND biological_state='alive')+
+            (SELECT COUNT(*) FROM fs_horses WHERE owner_character_id=? AND biological_state='alive' AND availability<>'sold')+
             (SELECT COUNT(*) FROM fs_operations WHERE character_id=? AND state IN ('payment_pending','paid')) AS total]],q.characterId,q.characterId)
         local limit=tonumber(Config.horseLimits.player)
         local pending=tx.one("SELECT COUNT(*) AS total FROM fs_operations WHERE character_id=? AND state IN ('payment_pending','paid')",q.characterId)
         if not pending or tonumber(pending.total)~=0 then failure='purchase_pending';return false end
-        if not count or not F.IsRevision(tonumber(count.total)) or not F.IsRevision(limit) or limit<1 or tonumber(count.total)>=limit then failure='horse_limit';return false end
+        local incoming=Stables.HorseTrade and Stables.HorseTrade.IncomingCount(tx,q.characterId) or 0
+        if not count or not F.IsRevision(tonumber(count.total)) or not F.IsRevision(limit) or limit<1 or tonumber(count.total)+incoming>=limit then failure='horse_limit';return false end
         if not F.IsCurrent(session) or os.time()>q.expiresAt then failure='quote_expired';return false end
         return tx.exec("UPDATE fs_operations SET state='payment_pending',revision=revision+1 WHERE operation_id=? AND state='reserved'",q.id)==1
     end)
@@ -208,6 +209,8 @@ function P.Confirm(session,site,p,authorize)
     return P.Resume(q.id,q.characterId)
 end
 function P.Tick()
+    if Stables.HorseResale then Stables.HorseResale.Tick() end
+    if Stables.HorseTrade then Stables.HorseTrade.Tick() end
     if Stables.Tack then Stables.Tack.Tick() end
     -- Only confirmed new checkout intents; never submit unpaid quotes or adopt
     -- legacy/proof orders. Committed intent may complete while its buyer is offline.

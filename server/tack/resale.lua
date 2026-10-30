@@ -64,6 +64,7 @@ function S.Quote(session,site,p,authorize)
     if not StableLocations[site] or StableLocations[site].shop.jobsEnabled or StableLocations[site].shop.hours.active then return bad('purchase_restricted') end
     if DB.one("SELECT operation_id FROM fs_tack_sales WHERE character_id=? AND state IN ('retiring','paying') LIMIT 1",session.characterId) then return bad() end
     local snapshot=T.SaleSnapshot(session,p.instanceId);if not snapshot.ok then return snapshot end
+    for _,item in ipairs(snapshot.value.items) do if (item.contents or 0)>0 then return bad('storage_not_empty') end end
     local q={kind='tack_sale.v1',characterId=session.characterId,accountId=session.accountId,site=site,selected=p.instanceId,
         percent=percent,expiresAt=os.time()+45,items=snapshot.value.items,equipment=snapshot.value.equipment,
         totals={dollars=0,gold=0},wallets={},sources={}}

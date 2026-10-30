@@ -1,5 +1,40 @@
 local english=Locales.en_lang
+english.menu_training='Permanent Progression'
+english.menu_trainingLevel='Training Level'
+english.menu_trainingNext='Next Stat Reward: %d XP'
+english.menu_trainingCapped='All permanent stat bonuses earned.'
+english.menu_trainingEarned='Training level %d reached. Permanent stats improved.'
 local extra={
+    bonding='Bonding',bondingXp='Saved XP',bondingLevel='Bonding Level',bondingNext='Next Bonding Level: %d XP',
+    bondingRestored='Saved bonding XP: %d (bonding level %d/4).',
+    bondingEarned='+%d XP (%s). Saved bonding XP: %d.',
+    bondingReason_riding='Riding',bondingReason_leading='Leading',bondingReason_feed='Feeding',bondingReason_brush='Brushing',
+    trades='Trades',tradesEmpty='No pending offers. Choose a stored horse in Stats & Details or a tack piece in Horse Tack to offer it.',horseTradeReview='Trade Horse',horseTradeHorse='Horse: %s',
+    horseTradeHelp='Both players must have this stable open and be within five metres. Review the horse, included tack and total package price. Offers expire after three minutes.',
+    horseTradeCheckbox='Include all equipped tack and saddlebag contents',
+    horseTradeIncluded='All listed equipped tack and saddlebag contents are included in the total price.',
+    horseTradeRetained='Equipped tack and saddlebag contents stay with the seller.',
+    horseTradeContents='Saddlebag contents (%d occupied slots)',horseTradeContentLine='%s x%d',
+    horseTradeState_draft='Review the horse, included items and total price, then send the offer.',
+    horseTradeState_offered='Waiting for the recipient to review and accept.',
+    horseTradeState_accepted='Trade accepted; checking payment.',
+    horseTradeState_owning='Transferring horse ownership. The horse remains reserved.',
+    horseTradeState_equipping='Transferring the included equipment. The horse remains reserved.',
+    horseTradeState_paying='Completing payment and the horse handover.',
+    horseTradeState_refunding='Ownership transfer refused; refund pending.',
+    horseTradeState_completed='Horse trade completed.',horseTradeState_cancelled='Horse trade cancelled.',
+
+    horseSaleOffer='Stable Offer: %s',
+    horseSaleKeepTack='All equipped tack and saddlebag contents stay yours in stable storage.',
+
+    horseSaleReview='Review Horse Sale',horseSaleConfirm='Confirm Horse Sale',horseSaleSell='Sell Horse',
+    horseSaleSummary='Sell %s for %s? All equipped tack and saddlebag contents remain yours in stable storage.',
+    horseSaleComplete='Horse sold. Your tack remains in stable storage.',
+    horseSalePending='Horse sale is pending. Refresh before retrying; the same sale will recover automatically.',
+    horseSaleFailed='Horse sale unavailable: %s',
+    saddlebagsOpen='Saddlebags',saddlebagsUnavailable='Stand beside your idle, dismounted horse with saddlebags equipped.',
+    saddlebagsContents='Includes all contents: %d occupied slots. Contents transfer with these saddlebags.',
+    saddlebagsEmptyRequired='Empty the saddlebags before selling them to the stable.',
     saddlebags='Saddlebags',saddlebagNumber='Saddlebag %d',noSaddlebag='No Saddlebag',tackOwned_saddlebag='My Saddlebags',tackBrowse_saddlebag='Browse Saddlebags',tackEquip_saddlebag='Equip Saddlebag',tackUnequip_saddlebag='Unequip Saddlebag',tackBuy_saddlebag='Buy Saddlebag',tackConfirm_saddlebag='Confirm Saddlebag Purchase',tackSaleReview_saddlebag='Review Saddlebag Sale',tackSaleConfirm_saddlebag='Confirm Saddlebag Sale',tackSaleSell_saddlebag='Sell Saddlebag',
     bedrolls='Bedrolls',bedrollNumber='Bedroll %d',noBedroll='No Bedroll',tackOwned_bedroll='My Bedrolls',tackBrowse_bedroll='Browse Bedrolls',tackEquip_bedroll='Equip Bedroll',tackUnequip_bedroll='Unequip Bedroll',tackBuy_bedroll='Buy Bedroll',tackConfirm_bedroll='Confirm Bedroll Purchase',tackSaleReview_bedroll='Review Bedroll Sale',tackSaleConfirm_bedroll='Confirm Bedroll Sale',tackSaleSell_bedroll='Sell Bedroll',
     bridles='Bridles',bridleNumber='Bridle %d',noBridle='No Bridle',tackOwned_bridle='My Bridles',tackBrowse_bridle='Browse Bridles',tackEquip_bridle='Equip Bridle',tackUnequip_bridle='Unequip Bridle',tackBuy_bridle='Buy Bridle',tackConfirm_bridle='Confirm Bridle Purchase',tackSaleReview_bridle='Review Bridle Sale',tackSaleConfirm_bridle='Confirm Bridle Sale',tackSaleSell_bridle='Sell Bridle',

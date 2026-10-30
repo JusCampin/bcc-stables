@@ -35,14 +35,19 @@ local function view(row)
         buyerName=Stables.StableMenu.CharacterName(q.buyer.characterId)}
 end
 local function context(p,id) return {actorCharacterId=p.characterId,actorAccountId=p.accountId,correlationId=id} end
+local function scope(q) return q.kind=='horse_trade.v1' and 'horse' or 'tack' end
 local function payout(q)
-    return {accountId=q.sellerWallet,currency=q.currency,amount=q.amount,reasonCode='stables.tack_trade_sale',
-        referenceType='stables_tack_trade',referenceId=q.id,idempotencyKey='stables.tack.trade.sale:'..q.id}
+    return {accountId=q.sellerWallet,currency=q.currency,amount=q.amount,reasonCode='stables.'..scope(q)..'_trade_sale',
+        referenceType='stables_'..scope(q)..'_trade',referenceId=q.id,idempotencyKey='stables.'..scope(q)..'.trade.sale:'..q.id}
 end
 local function preflight(q)
     if q.amount==0 then return F.Ok(true) end
     local result=F.Call('feather-economy','CheckIssue',payout(q),context(q.seller,q.id))
-    return result.ok and result.value.allowed==true and result.value.sourceAccountId==q.sourceAccount and F.Ok(true) or bad('tack_trade_payment_unavailable')
+    if result.ok and type(result.value)=='table' and result.value.allowed==true and result.value.sourceAccountId==q.sourceAccount then return F.Ok(true) end
+    local detail=type(result.details)=='table' and result.details.policyCode or nil
+    print(('[bcc-stables] %s trade payout preflight refused; currency=%s reason=%s code=%s message=%s policy=%s'):format(
+        scope(q),q.currency,payout(q).reasonCode,tostring(result.code or 'source_account_mismatch'),tostring(result.message or 'Payout source disagrees.'),tostring(detail or 'none')))
+    return bad(scope(q)..'_trade_payment_unavailable')
 end
 local function wallet(character,currency)
     local result=F.Call('feather-economy','FindAccountsByOwner',{ownerType='character',ownerId=character})
@@ -54,9 +59,59 @@ local function wallet(character,currency)
     end end
     return F.IsUuid(id) and F.Ok(id) or bad('account_not_found')
 end
+-- Shared settlement for tack and horse offers; providers retain their receipts.
+function D.PaymentTerms(q)
+    if q.amount>0 then
+        local seller=wallet(q.seller.characterId,q.currency);if not seller.ok then return seller end;q.sellerWallet=seller.value
+        local buyer=wallet(q.buyer.characterId,q.currency);if not buyer.ok then return buyer end;q.buyerWallet=buyer.value
+        for _,kind in ipairs({'system_sink','system_source'}) do
+            local a=F.Call('feather-economy','GetSystemAccount',{currency=q.currency,accountType=kind})
+            if not a.ok or not a.value or not F.IsUuid(a.value.accountId) or a.value.accountType~=kind
+                or a.value.currency~=q.currency or a.value.status~='open' then return bad('account_not_found') end
+            q[kind=='system_sink' and 'sinkAccount' or 'sourceAccount']=a.value.accountId
+        end
+        local check=preflight(q);if not check.ok then return check end
+    end
+    return F.Ok(true)
+end
+function D.Preflight(q) return preflight(q) end
+function D.Capture(q)
+    local check=preflight(q);if not check.ok then return check end
+    if q.amount==0 then return F.Ok(false) end
+    local kind=scope(q)
+    local paid=F.Call('feather-economy','Transfer',{fromAccountId=q.buyerWallet,toAccountId=q.sinkAccount,currency=q.currency,
+        amount=q.amount,reasonCode='stables.'..kind..'_trade_payment',referenceType='stables_'..kind..'_trade',referenceId=q.id,
+        idempotencyKey='stables.'..kind..'.trade.payment:'..q.id},context(q.buyer,q.id))
+    if not paid.ok then return paid end
+    local r=paid.value
+    if type(r)~='table' or not F.IsUuid(r.transactionId) or r.operation~='transfer' or r.sourceResource~='bcc-stables'
+        or r.fromAccountId~=q.buyerWallet or r.toAccountId~=q.sinkAccount or r.amount~=q.amount or r.currency~=q.currency
+        or r.reasonCode~='stables.'..kind..'_trade_payment' or r.referenceType~='stables_'..kind..'_trade' or r.referenceId~=q.id then return bad() end
+    return F.Ok(r.transactionId)
+end
+function D.PaySeller(q)
+    if q.amount==0 then return F.Ok(true) end
+    local paid=F.Call('feather-economy','Issue',payout(q),context(q.seller,q.id));if not paid.ok then return paid end
+    local r=paid.value;local kind=scope(q)
+    if type(r)~='table' or not F.IsUuid(r.transactionId) or r.operation~='issue' or r.sourceResource~='bcc-stables'
+        or r.fromAccountId~=q.sourceAccount or r.toAccountId~=q.sellerWallet or r.amount~=q.amount or r.currency~=q.currency
+        or r.reasonCode~='stables.'..kind..'_trade_sale' or r.referenceType~='stables_'..kind..'_trade' or r.referenceId~=q.id then return bad() end
+    return F.Ok(true)
+end
+function D.Refund(q,payment)
+    if q.amount==0 then return F.Ok(true) end
+    local refund=F.Call('feather-economy','ReversePayment',{transactionId=payment},context(q.buyer,q.id))
+    if not refund.ok then return refund end
+    local r=refund.value
+    if type(r)~='table' or not F.IsUuid(r.transactionId) or r.operation~='reversal' or r.amount~=q.amount or r.currency~=q.currency
+        or r.sourceResource~='bcc-stables' or r.reasonCode~='stables.'..scope(q)..'_trade_refund'
+        or r.fromAccountId~=q.sinkAccount or r.toAccountId~=q.buyerWallet
+        or r.referenceType~='economy_transaction' or r.referenceId~=payment then return bad() end
+    return F.Ok(true)
+end
 local function same(q,snapshot)
     if #q.items~=#snapshot.items then return false end
-    for i,a in ipairs(q.items) do for _,key in ipairs({'instanceId','revision','catalogId','condition','maximum','currency','paid'}) do
+    for i,a in ipairs(q.items) do for _,key in ipairs({'instanceId','revision','catalogId','condition','maximum','currency','paid','contents'}) do
         if a[key]~=snapshot.items[i][key] then return false end
     end end
     for slot,id in pairs(q.equipment) do if snapshot.equipment[slot]~=id then return false end end
@@ -72,17 +127,8 @@ function D.Offer(s,p)
         selected=p.instanceId,amount=p.amount,currency=p.currency,items=snapshot.value.items,equipment=snapshot.value.equipment,expiresAt=os.time()+180}
     if not F.IsRevision(q.amount) or q.amount>1000000000 or (q.currency~='dollars' and q.currency~='gold') then return bad('invalid_price') end
     local uuid=DB.one('SELECT UUID() AS id');if not uuid or not F.IsUuid(uuid.id) then return bad() end;q.id=uuid.id
-    if q.amount>0 then
-        local seller=wallet(q.seller.characterId,q.currency);if not seller.ok then return seller end;q.sellerWallet=seller.value
-        local buyer=wallet(q.buyer.characterId,q.currency);if not buyer.ok then return buyer end;q.buyerWallet=buyer.value
-        for _,kind in ipairs({'system_sink','system_source'}) do
-            local a=F.Call('feather-economy','GetSystemAccount',{currency=q.currency,accountType=kind})
-            if not a.ok or not a.value or not F.IsUuid(a.value.accountId) or a.value.accountType~=kind
-                or a.value.currency~=q.currency or a.value.status~='open' then return bad('account_not_found') end
-            q[kind=='system_sink' and 'sinkAccount' or 'sourceAccount']=a.value.accountId
-        end
-        local check=preflight(q);if not check.ok then return check end
-    end
+    local funded=D.PaymentTerms(q);if not funded.ok then return funded end
+
     -- One offer/settlement per character. Sorted admission locks serialize both
     -- directions without locking Inventory or Economy through this transaction.
     local chars={q.seller.characterId,q.buyer.characterId};table.sort(chars)
@@ -108,22 +154,12 @@ function D.Resume(id)
         local row,q=found.value,found.value.terms
         if row.state=='draft' or row.state=='offered' or row.state=='completed' or row.state=='cancelled' then return F.Ok(view(row)) end
         if row.state=='accepted' then
-            local check=preflight(q);if not check.ok then return check end
-            local payment
-            if q.amount>0 then
-                local paid=F.Call('feather-economy','Transfer',{fromAccountId=q.buyerWallet,toAccountId=q.sinkAccount,currency=q.currency,
-                    amount=q.amount,reasonCode='stables.tack_trade_payment',referenceType='stables_tack_trade',referenceId=q.id,
-                    idempotencyKey='stables.tack.trade.payment:'..q.id},context(q.buyer,q.id))
-                if not paid.ok then
-                    if paid.code=='insufficient_funds' then change(id,'accepted','cancelled') end
-                    return paid
-                end
-                local r=paid.value
-                if not F.IsUuid(r.transactionId) or r.operation~='transfer' or r.sourceResource~='bcc-stables'
-                    or r.fromAccountId~=q.buyerWallet or r.toAccountId~=q.sinkAccount or r.amount~=q.amount or r.currency~=q.currency
-                    or r.reasonCode~='stables.tack_trade_payment' or r.referenceType~='stables_tack_trade' or r.referenceId~=q.id then return bad() end
-                payment=r.transactionId
+            local captured=D.Capture(q)
+            if not captured.ok then
+                if captured.code=='insufficient_funds' then change(id,'accepted','cancelled') end
+                return captured
             end
+            local payment=captured.value or nil
             if not change(id,'accepted','moving',payment) then return bad() end
             row.state='moving';row.payment_transaction_id=payment
         end
@@ -144,20 +180,10 @@ function D.Resume(id)
             row.state=q.amount>0 and 'paying' or 'completed'
         end
         if row.state=='paying' then
-            local paid=F.Call('feather-economy','Issue',payout(q),context(q.seller,q.id));if not paid.ok then return paid end
-            local r=paid.value
-            if not F.IsUuid(r.transactionId) or r.operation~='issue' or r.sourceResource~='bcc-stables'
-                or r.fromAccountId~=q.sourceAccount or r.toAccountId~=q.sellerWallet or r.amount~=q.amount or r.currency~=q.currency
-                or r.reasonCode~='stables.tack_trade_sale' or r.referenceType~='stables_tack_trade' or r.referenceId~=q.id then return bad() end
+            local paid=D.PaySeller(q);if not paid.ok then return paid end
             if not change(id,'paying','completed') then return bad() end
         elseif row.state=='refunding' then
-            local refund=F.Call('feather-economy','ReversePayment',{transactionId=row.payment_transaction_id},context(q.buyer,q.id))
-            if not refund.ok then return refund end
-            local r=refund.value
-            if not F.IsUuid(r.transactionId) or r.operation~='reversal' or r.amount~=q.amount or r.currency~=q.currency
-                or r.sourceResource~='bcc-stables' or r.reasonCode~='stables.tack_trade_refund'
-                or r.fromAccountId~=q.sinkAccount or r.toAccountId~=q.buyerWallet
-                or r.referenceType~='economy_transaction' or r.referenceId~=row.payment_transaction_id then return bad() end
+            local refund=D.Refund(q,row.payment_transaction_id);if not refund.ok then return refund end
             if not change(id,'refunding','cancelled') then return bad() end
         end
         return F.Ok(view(assert(read(id).value)))

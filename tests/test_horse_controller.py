@@ -129,6 +129,15 @@ class HorseControllerTest(unittest.TestCase):
         self.assertEqual(self.lua.globals().createCount, 1)
         self.assertEqual(self.lua.globals().deleteCount, 1)
 
+    def test_target_menu_store_refuses_an_old_generation_and_keeps_current_horse(self):
+        self.call_and_bind();self.lua.execute('autoOccupancy=true')
+        result=self.controller.Store(3,None,'77777777-7777-4777-8777-777777777777')
+        self.assertEqual(result.code,'stale_call')
+        self.assertEqual(self.lua.globals().deleteCount,0)
+        self.assertEqual(self.case.scalar('SELECT state FROM fs_call_leases'),'active')
+        self.assertTrue(self.controller.Store(3,None,self.lua.globals().sent.generationId).ok)
+        self.assertEqual(self.lua.globals().deleteCount,1)
+
     def test_care_observation_uses_current_simulator_and_requires_life_facts(self):
         self.call_and_bind();self.lua.execute('autoOccupancy=true;entities[100].owner=4')
         session=self.lua.globals().session
@@ -306,6 +315,9 @@ class HorseControllerTest(unittest.TestCase):
             assert(exported.PrepareShutdown)
             local request=routes['stables.horses.call.request.v1'].options
             assert(request.requireCharacter and request.validatePayload({}) and not request.validatePayload({characterId='spoof'}))
+            local store=routes['stables.horses.call.store_current.v1'].options.validatePayload
+            assert(store({}) and store({generationId=row.horse_id}))
+            assert(not store({generationId='bad'}) and not store({generationId=row.horse_id,characterId='spoof'}))
             local bind=routes['stables.horses.call.bind.v1'].options.validatePayload
             assert(bind({generationId=sent and sent.generationId or row.horse_id,netId=55}))
             assert(not bind({generationId=row.horse_id,netId=55,characterId='spoof'}))

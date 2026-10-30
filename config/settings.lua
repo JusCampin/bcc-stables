@@ -63,11 +63,33 @@ Config = {
         purchasesEnabled = false,
     },
 
+    bonding = {
+        enabled = false, -- Install database/feather_bonding.sql. Uninitialized horses start at zero XP.
+        showXpMessage = true,
+        statRewardsEnabled = false, -- Install database/feather_progression.sql before enabling.
+        xpPerLevel = 1000,
+        maxStatBonus = 2, -- Earned ranks per stat; native ranks never exceed 9.
+        showLevelUpMessage = true,
+        careCooldownSeconds = 60, -- Per horse and action; care still works between XP awards.
+        xpRewards = {
+            riding = 10,
+            leading = 10,
+            feed = 5,
+            brush = 5
+        },
+    },
+
     tack = {
         enabled = false, -- Install database/feather_tack.sql and configure Inventory collections.
         resaleEnabled = false, -- Enable after scoped Economy payout authorization is configured.
         resalePercent = 50, -- Original paid price, reduced by current piece condition.
         tradingEnabled = false, -- Free/paid nearby trades; install feather_tack.sql and Economy scopes first.
+    },
+
+    saddlebags = {
+        enabled = true, -- Requires equipped, character-owned saddlebag and Inventory collection storage.
+        slots = 50,
+        maxWeight = 250,
     },
 
     feeding = {
@@ -152,6 +174,8 @@ Config = {
     -----------------------------------------------------
 
     sales = {
+        tradingEnabled = false, -- Nearby free/paid horse offers, optional equipped tack and bag contents.
+        enabled = false, -- Requires database/feather_horse_sales.sql and scoped Economy Issue permission.
         -- Percentage of the catalog price returned when selling a purchased horse.
         purchasedHorsePriceMultiplier = 0.70,
     },

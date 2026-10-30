@@ -71,6 +71,15 @@ class ResaleTest(unittest.TestCase):
     def tearDown(self): self.h.tearDown()
     def quote(self,id): return self.sale.Quote(self.lua.globals().session,'valentine',self.lua.table_from({'instanceId':id}),self.lua.globals().Authorize)
     def confirm(self,q): return self.sale.Confirm(self.lua.globals().session,'valentine',self.lua.table_from({'operationId':q.operationId,'dollars':q.totals.dollars,'gold':q.totals.gold}),self.lua.globals().Authorize)
+    def test_nonempty_saddlebags_refuse_npc_sale_before_quote_or_payment(self):
+        self.h.catalog=self.lua.globals().Tack.CatalogBySlot.saddlebag[1].id
+        id=self.h.buy().instanceId
+        self.lua.execute("Stables.Saddlebags={Summary=function() return {ok=true,value={itemCount=2}} end}")
+        result=self.quote(id);self.assertFalse(result.ok);self.assertEqual(result.code,'storage_not_empty')
+        self.assertEqual(self.lua.globals().retirements,0);self.assertEqual(self.lua.globals().credits,0)
+        self.lua.execute("Stables.Saddlebags.Summary=function() return {ok=true,value={itemCount=0}} end")
+        self.assertTrue(self.quote(id).ok)
+
     def test_loose_piece_sale_and_replay_pay_and_remove_once(self):
         id=self.h.buy().instanceId
         self.lua.globals().pieces[id].metadata.condition=60
