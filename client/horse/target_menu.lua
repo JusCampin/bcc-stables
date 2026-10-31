@@ -1,21 +1,26 @@
 -- Native target-menu actions use completed prompt events, not raw key presses.
--- One nearby-horse reader handles Cargo and Flee.
+-- One nearby-horse reader handles Cargo, Flee and native Revive input.
 local C,H=Stables.Client,Stables.Horse
 local function yes(v) return v==true or v==1 end
 CreateThread(function()
     local cargoEnabled=Config.saddlebags and Config.saddlebags.enabled==true
     local fleeEnabled=Config.stable and Config.stable.fleeEnabled==true
-    if not cargoEnabled and not fleeEnabled then return end
+    local worldEnabled=Config.worldCare and Config.worldCare.enabled==true
+    local injuryEnabled=Stables.HorseInjuries and Stables.HorseInjuries.Enabled()
+    if not cargoEnabled and not fleeEnabled and not worldEnabled and not injuryEnabled then return end
     local buffer=CreateEventDataBuffer(80) -- ten eight-byte event fields
     local promptEvent=GetHashKey('EVENT_PLAYER_PROMPT_TRIGGERED')
     local interaction=GetHashKey('Interaction_LootSaddleBags')
     while true do
         local sleep=500
+        local worldRead=false
         local r=H.GetActive();local ped=PlayerPedId()
         if r and not yes(IsEntityDead(ped)) and yes(IsPedOnFoot(ped)) and not IsNuiFocused() then
             local a,b=GetEntityCoords(ped),GetEntityCoords(r.entity)
             if (a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2<=9 then
                 sleep=0
+                if injuryEnabled then Stables.HorseInjuries.Input(r) end
+                if worldEnabled and Stables.HorseWorldCare then worldRead=true;Stables.HorseWorldCare.Input(r) end
                 for index=0,GetNumberOfEvents(0)-1 do
                     if Citizen.InvokeNative(0xA85E614430EFF816,0,index)==promptEvent
                         and yes(Citizen.InvokeNative(0x57EC5FA4D4D6AFCA,0,index,buffer:Buffer(),10))
@@ -41,6 +46,7 @@ CreateThread(function()
                 end
             end
         end
+        if not worldRead and Stables.HorseWorldCare then Stables.HorseWorldCare.Hide() end
         Wait(sleep)
     end
 end)

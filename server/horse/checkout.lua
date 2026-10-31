@@ -195,7 +195,7 @@ function P.Confirm(session,site,p,authorize)
         local row=read(q.id,q.characterId,tx); if not row.ok then return false end
         if row.value.state~='reserved' then return true end
         local count=tx.one([[SELECT
-            (SELECT COUNT(*) FROM fs_horses WHERE owner_character_id=? AND biological_state='alive' AND availability<>'sold')+
+            (SELECT COUNT(*) FROM fs_horses WHERE owner_character_id=? AND biological_state IN ('alive','downed') AND availability<>'sold')+
             (SELECT COUNT(*) FROM fs_operations WHERE character_id=? AND state IN ('payment_pending','paid')) AS total]],q.characterId,q.characterId)
         local limit=tonumber(Config.horseLimits.player)
         local pending=tx.one("SELECT COUNT(*) AS total FROM fs_operations WHERE character_id=? AND state IN ('payment_pending','paid')",q.characterId)

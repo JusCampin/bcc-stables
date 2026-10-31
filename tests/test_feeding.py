@@ -201,7 +201,7 @@ class FeedingTest(unittest.TestCase):
         self.assertEqual(self.f.count('fs_care_operations'),1);self.assertEqual(self.lua.globals().consumptions,1)
 
     def test_routes_reject_arbitrary_item_and_spoofed_fields(self):
-        self.lua.execute("exports['feather-core'].RegisterRpc=function(_,name,fn,options) validation=options.validatePayload;return {ok=true} end")
+        self.lua.execute("exports['feather-core'].RegisterRpc=function(_,name,fn,options) if name=='stables.horses.call.feed.v1' then validation=options.validatePayload end;return {ok=true} end")
         self.assertTrue(self.p.Start()['ok'])
         validate=self.lua.globals().validation
         self.assertFalse(validate(self.f.table({'food':'invented'})))

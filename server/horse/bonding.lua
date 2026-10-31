@@ -97,6 +97,23 @@ function G.EnsureStats(tx,horseId,model)
     return F.Ok(value)
 end
 function G.Forget(r) pending[r.id]=nil;dirty[r.horse.horseId]=nil end
+-- The training completion transaction supplies its own durable operation CAS.
+-- No client-provided totals or new XP pool; reuse permanent rank advancement.
+function G.Course(tx,horseId,characterId,amount)
+    if not G.Enabled() or not installed or not F.IsRevision(amount) or amount<1 or amount>1000 then return bad() end
+    local horse=tx.one('SELECT owner_character_id,biological_state,catalog_id FROM fs_horses WHERE horse_id=? FOR UPDATE',horseId)
+    if not horse or horse.owner_character_id~=characterId or (horse.biological_state~='alive' and horse.biological_state~='downed') then return bad() end
+    tx.exec('INSERT IGNORE INTO fs_horse_bonding(horse_id) VALUES(?)',horseId)
+    local saved=snapshot(tx.one('SELECT * FROM fs_horse_bonding WHERE horse_id=? FOR UPDATE',horseId))
+    if not saved.ok then return saved end
+    local value=saved.value;amount=math.min(amount,MAX_XP-value.xp)
+    local ok,raw=advance(value,horse.catalog_id,value.xp+amount);if not ok then return bad() end
+    local changed=raw and tx.exec('UPDATE fs_horse_bonding SET xp=xp+?,training_json=?,revision=revision+1 WHERE horse_id=? AND revision=?',amount,raw,horseId,value.revision)
+        or tx.exec('UPDATE fs_horse_bonding SET xp=xp+?,revision=revision+1 WHERE horse_id=? AND revision=?',amount,horseId,value.revision)
+    if changed~=1 then return bad() end
+    value.xp=value.xp+amount;value.revision=value.revision+1;value.amount=amount
+    return F.Ok(value)
+end
 function G.Changed(horseId) if installed then dirty[horseId]=true end end
 -- Runs inside the caller's character admission/care transaction. Care's own
 -- prepared -> applied CAS is its XP receipt; replay cannot award a second time.
@@ -105,12 +122,14 @@ function G.Care(tx,q)
     if amount==nil or amount==0 then return F.Ok(nil) end
     if not F.IsRevision(amount) or amount>1000000 then return bad() end
     local horse=tx.one('SELECT owner_character_id,biological_state,catalog_id FROM fs_horses WHERE horse_id=? FOR UPDATE',q.horseId)
-    if not horse or horse.owner_character_id~=q.characterId or horse.biological_state~='alive' then return bad() end
+    if not horse or horse.owner_character_id~=q.characterId then return bad() end
+    if horse.biological_state=='downed' then return F.Ok(nil) end -- Settle an already consumed care receipt without interrupted XP.
+    if horse.biological_state~='alive' then return bad() end
     tx.exec('INSERT IGNORE INTO fs_horse_bonding(horse_id) VALUES(?)',q.horseId)
     local row=tx.one('SELECT * FROM fs_horse_bonding WHERE horse_id=? FOR UPDATE',q.horseId)
     local saved=snapshot(row);if not saved.ok then return saved end
     local value=saved.value
-    local column=q.action=='brush' and 'last_brush_at' or q.action=='feed' and 'last_feed_at'
+    local column=q.action=='brush' and 'last_brush_at' or q.action=='feed' and 'last_feed_at' or q.action=='drink' and 'last_drink_at'
     if not column or not F.IsRevision(q.bondingAt) or not F.IsRevision(q.bondingCooldown) or q.bondingCooldown>86400 then return bad() end
     local last=tonumber(row[column]) or 0
     if last>0 and q.bondingAt-last<q.bondingCooldown then amount=0 end
@@ -127,7 +146,9 @@ function G.Care(tx,q)
     value.amount=amount;return F.Ok(value)
 end
 local function eligible(r)
-    return G.Enabled() and installed and H.MovementRecord(r.session)==r and not r.care and not r.flee
+    if r.training then return false end
+    if Stables.Injuries and Stables.Injuries.Blocked(r) then return false end
+    return G.Enabled() and installed and H.MovementRecord(r.session)==r and not r.care and not r.flee and not r.worldCare
 end
 local function position(entity)
     local p=GetEntityCoords(entity)

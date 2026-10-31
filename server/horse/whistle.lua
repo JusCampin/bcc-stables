@@ -16,6 +16,8 @@ local function current(r)
     return C.MovementRecord(r.session)==r
 end
 local function issue(r,mode)
+    if r.training then return F.Error('training_busy','Finish or cancel the course first.') end
+    if Stables.Injuries and Stables.Injuries.Blocked(r) then return F.Error('horse_downed','Your horse needs a reviver.') end
     local owner=NetworkGetEntityOwner(r.entity)
     local target=GetPlayerPed(r.session.source)
     local targetExists=DoesEntityExist(target)
@@ -41,6 +43,11 @@ function W.Request(source,p)
     local session=F.RequireSession(source); if not session.ok then return session end
     local r=C.MovementRecord(session.value)
     if not r or r.flee or r.whistleBusy or r.care then return F.Error('horse_not_ready','A current idle owned horse is required.') end
+    if r.worldCare then Stables.WorldCare.Stop(r) end
+    if r.worldExit then
+        r.worldExit.whistleMode=p.mode
+        return F.Ok({generationId=r.id,waking=true})
+    end
     local mode=p.mode=='toggle_follow' and (r.movement and r.movement.mode=='follow' and 'stop' or 'follow') or 'approach'
     if mode~='stop' and GetGameTimer()-(r.lastWhistle or -2000)<1500 then return F.Error('rate_limited','Wait before whistling again.') end
     r.whistleBusy=true

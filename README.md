@@ -16,7 +16,21 @@ retain actual depleted cores. Permanent Progression in Stats & Details shows
 saved effective ranks and the next milestone. The first earned rank, displayed
 bonus, restart persistence and cleanup have passed live testing. Native core
 preservation at the instant of a rank change and migrated-simulator stat application
-remain pending live checks. Other world-care XP remains deferred.
+remain pending live checks. Trough/hay-prop care and specialist training remain deferred.
+
+XP and training-level messages now use optional `feather-notify` presentation as
+well as F8, honoring the existing message toggles. Natural-water drinking,
+resting, sleeping and wallowing are implemented behind `Config.worldCare.enabled`
+(default false); existing databases also need `database/feather_world_care.sql`.
+Target an idle, dismounted, unled horse to use its Drink/Rest/Sleep/Wallow prompts.
+Whistling ends care before the normal approach/follow request; attempting to mount
+waits for a confirmed stand-up exit, then mounts. No separate Stand/Wake key is used.
+Default unlocks require 50/350/1150/2450 saved XP respectively. Drinking restores
+20 health/stamina after 15 seconds and can award 5 XP with the care cooldown;
+rest restores 5/5 per five seconds, sleep 10/10, and wallowing is animation-only.
+Rest/sleep grant no XP. Actual animations and eligibility are observed by the
+current network simulator; rewards are server-timed and condition/XP commit
+together. Migration cancels the action safely. Live acceptance is pending.
 
 Player horse trades are implemented behind `Config.sales.tradingEnabled` (default
 false), with `database/feather_horse_trades.sql` and scoped provider configuration.
@@ -268,3 +282,39 @@ Saddlebag storage follows the unique bag piece (Config.saddlebags: 50 slots / 25
 Native target-menu Flee now uses the same generation-fenced store/clear flow as HorseStore, respecting Config.stable.fleeEnabled and retaining condition and saddlebag contents. See docs/FEATHER_INTEGRATION.md for the target_menu.lua manifest update and live test.
 
 Target-menu Flee uses the original run-away native, followed by server Store cleanup at ten seconds or over 200 metres. Normal HorseStore remains immediate; occupancy is rechecked before deletion.
+
+### Feather injury/revival testing
+
+Recoverable injuries are implemented behind `Config.death.enabled` (default
+false). Enable persistent writhe, keep permanent death false, and set
+`reviveHealth` / `reviveStamina` (default 25 each). Use the existing Inventory
+Horse Reviver beside a downed horse. Committed injury survives storing and
+restarting. Tack/cargo remain intact. No legacy death commands are loaded.
+Execute `database/feather_injuries.sql` to enable the existing item's Use flag
+and grant Inventory purpose `stables.revive.v1` for `consumable_horse_reviver`.
+See docs/FEATHER_INTEGRATION.md, Recoverable horse injuries, for deployment and
+live acceptance steps. Implemented and offline-tested; live testing pending.
+### Native Revive prompt follow-up (2026-10-30)
+
+The primary revival interaction is now the native horse Revive prompt, using
+original Horses INPUT_REVIVE handling for the current downed target. The shared
+nearby-horse reader handles this even when Cargo/Flee/world-care are disabled.
+The client sends only generationId; server-side Inventory membership lookup
+selects the owned reviver instance and reuses the same durable care receipt.
+Missing items and stale calls cannot consume or revive. Inventory Use remains
+an optional equivalent entry point, not a required player step. Live acceptance
+should activate the native Revive prompt rather than opening Inventory.
+475 offline tests pass; native prompt rendering/animation is live pending.
+No additional manifest, configuration or SQL changes beyond the injury build.
+### NPC professional training (Feather)
+
+The integrated instructor courses are optional: install database/feather_training.sql,
+merge the Config.training block from config/settings.lua, and enable training with
+saved bonding enabled. Existing surveyed grounds provide leading/riding courses
+through an outdoor instructor's L prompt and feather-menu-v2. Defaults are $35
+on completion, up to 75/112 XP, and 1000 professional XP per horse per UTC day.
+Training shares saved bonding/permanent progression. Unfinished courses cancel
+without payment; completed payment/XP is durably recovered. Storing cancels an
+unfinished course. Keep the standalone bcc-horse-training resource stopped.
+502 offline tests pass; live training acceptance is pending. Flaming Hooves is
+still deferred. Full setup/test details are in docs/FEATHER_INTEGRATION.md.

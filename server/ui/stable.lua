@@ -91,11 +91,11 @@ local function roster(s,cursor)
         end
     end
     if #ids==0 then return F.Ok({token=s.token,site=s.site,entries={},nextCursor=assets.nextCursor}) end
-    local rows=DB.query([[SELECT h.horse_id,h.availability,h.revision,r.model_key,r.asset_id,
+    local rows=DB.query([[SELECT h.horse_id,h.availability,h.biological_state,h.revision,r.model_key,r.asset_id,
         stable.selected_horse_id,stable.revision AS selection_revision
         FROM fs_character_stables stable INNER JOIN fs_horses h ON h.owner_character_id=stable.character_id
         INNER JOIN fs_asset_registrations r ON r.operation_id=h.origin_operation_id AND r.horse_id=h.horse_id
-        WHERE stable.character_id=? AND h.biological_state='alive' AND r.state='linked'
+        WHERE stable.character_id=? AND h.biological_state IN ('alive','downed') AND r.state='linked'
         AND r.asset_id IN (]]..table.concat(ids,',')..')',table.unpack(params))
     if not F.IsCurrent(s.session) or sessions[s.session.source]~=s then return F.Error('session_stale','Session changed.') end
     if type(rows)~='table' then return F.Error('database_unavailable','Roster unavailable.') end
@@ -105,7 +105,7 @@ local function roster(s,cursor)
         local asset=byAsset[row.asset_id]
         if not F.IsUuid(row.horse_id) or type(row.model_key)~='string' or not asset
             or asset.modelKey~=row.model_key or asset.metadata.stablesHorseId~=row.horse_id then return F.Error('horse_reconciliation_required','Invalid roster identity.') end
-        byHorse[row.asset_id]={horseId=row.horse_id,modelKey=row.model_key,availability=row.availability,name=R.NormalizeName(asset.metadata.name),gender=(asset.metadata.gender=='male' or asset.metadata.gender=='female') and asset.metadata.gender or nil,
+        byHorse[row.asset_id]={horseId=row.horse_id,modelKey=row.model_key,availability=row.availability,biologicalState=row.biological_state,name=R.NormalizeName(asset.metadata.name),gender=(asset.metadata.gender=='male' or asset.metadata.gender=='female') and asset.metadata.gender or nil,
             selected=row.horse_id==row.selected_horse_id,selectionRevision=tonumber(row.selection_revision)}
     end
     for _,asset in ipairs(assets.items) do if byHorse[asset.assetId] then entries[#entries+1]=byHorse[asset.assetId] end end
@@ -120,6 +120,7 @@ function M.Open(source,p)
     if site.shop.jobsEnabled or site.shop.hours.active then return F.Error('stable_unavailable','Restricted stable menus are not enabled yet.') end
     if sessions[source] then return F.Error('busy','A stable session is already open.') end
     local captured=F.RequireSession(source); if not captured.ok then return captured end
+    if Stables.Training and not Stables.Training.Clear(captured.value.characterId) then return F.Error('training_pending','Finish or cancel training before opening the stable.') end
     local s={session=captured.value,site=p.site,expires=GetGameTimer()+20000,busy=true}
     sessions[source]=s -- Blocks concurrent call admission before any yield.
     local ok,result=pcall(function()
@@ -194,7 +195,7 @@ function M.Request(source,p,action)
             if tx.one('SELECT generation_id FROM fs_call_slots WHERE character_id=? FOR UPDATE',s.session.characterId)
                 or tx.one("SELECT operation_id FROM fs_care_operations WHERE character_id=? AND state NOT IN ('applied','cancelled') LIMIT 1 FOR UPDATE",s.session.characterId) then return false end
             local horse=tx.one('SELECT owner_character_id,biological_state,availability FROM fs_horses WHERE horse_id=? FOR UPDATE',p.horseId)
-            if not horse or horse.owner_character_id~=s.session.characterId or horse.biological_state~='alive' or horse.availability~='stored' then return false end
+            if not horse or horse.owner_character_id~=s.session.characterId or (horse.biological_state~='alive' and horse.biological_state~='downed') or horse.availability~='stored' then return false end
             if stable.selected_horse_id~=p.horseId then
                 if tx.exec('UPDATE fs_character_stables SET selected_horse_id=?,revision=revision+1 WHERE character_id=? AND revision=?',p.horseId,s.session.characterId,p.revision)~=1 then error('Selection write failed.') end
             end

@@ -45,6 +45,7 @@ local function transaction(characterId, body, session)
 end
 
 local function careClear(tx, characterId)
+    if Stables.Training and not Stables.Training.Clear(characterId,tx) then return fail('training_pending','Resolve the completed training payment/reward first.') end
     if tx.one([[SELECT operation_id FROM fs_care_operations WHERE character_id=?
         AND state NOT IN ('applied','cancelled') LIMIT 1 FOR UPDATE]], characterId) then
         return fail('horse_care_busy', 'Resolve pending horse care before calling another horse.')
@@ -125,7 +126,8 @@ local function project(tx, v, target, reason)
     local revision = horse and tonumber(horse.revision)
     if not horse or horse.horse_id ~= v.horse_id or horse.origin_operation_id ~= v.operation_id
         or horse.owner_character_id ~= v.character_id or horse.availability ~= from
-        or (target == 'active' and horse.biological_state ~= 'alive')
+        or (target == 'active' and horse.biological_state ~= 'alive'
+            and not (horse.biological_state=='downed' and Stables.Injuries and Stables.Injuries.Enabled()))
         or not F.IsRevision(revision) or revision == 9007199254740991 then return changed() end
     writeBatch(tx, {DB.stmt([[INSERT INTO fs_horse_runtime_events
         (event_id,horse_id,generation_id,from_availability,to_availability,prior_revision,revision,reason)
@@ -163,7 +165,8 @@ function R.Reserve(session, horse, generationId, processEpoch)
             FROM fs_horses horse INNER JOIN fs_asset_registrations registration ON registration.operation_id=horse.origin_operation_id
             INNER JOIN fs_operations operation ON operation.operation_id=horse.origin_operation_id
             WHERE horse.horse_id=? AND horse.owner_character_id=? FOR UPDATE]], horse.horseId, session.characterId)
-        if not saved or saved.availability ~= 'stored' or saved.biological_state ~= 'alive'
+        if not saved or saved.availability ~= 'stored' or (saved.biological_state ~= 'alive'
+            and not (saved.biological_state=='downed' and Stables.Injuries and Stables.Injuries.Enabled()))
             or saved.origin_operation_id ~= horse.operationId or tonumber(saved.revision) ~= horse.projectionRevision
             or saved.asset_id ~= horse.assetId or saved.model_key ~= horse.modelKey
             or saved.registration_state ~= 'linked' or saved.registration_character ~= saved.operation_character

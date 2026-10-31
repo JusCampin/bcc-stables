@@ -22,3 +22,9 @@ function C.Rpc(action,payload,timeout)
     return reply or {ok=false,code='timeout'}
 end
 function C.Message(text) print('[bcc-stables] '..text) end
+function C.Notify(text)
+    C.Message(text)
+    if GetResourceState('feather-notify')=='started' then
+        pcall(function() exports['feather-notify']:ShowNotification({style='right',message=text,duration=4000}) end)
+    end
+end

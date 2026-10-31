@@ -215,6 +215,21 @@ class HorseControllerTest(unittest.TestCase):
         self.assertEqual(self.case.scalar('SELECT state FROM fs_call_leases'), 'released')
         self.assertEqual(self.case.scalar('SELECT availability FROM fs_horses'), 'stored')
 
+    def test_stop_during_training_does_not_run_sql_before_native_proof(self):
+        self.call_and_bind()
+        self.db.executescript("CREATE TABLE fs_training_sessions(operation_id TEXT PRIMARY KEY,state TEXT); INSERT INTO fs_training_sessions VALUES('active-course','active');")
+        self.lua.execute("Config={training={enabled=false}}")
+        self.lua.execute((lifecycle.ROOT/'server/horse/training.lua').read_text())
+        self.lua.execute("Stables.HorseController.MovementRecord(session).training={id='active-course',state='active',index=2,startedAt=0}")
+        before=self.case.write_count
+        self.controller.Stop()
+        self.assertEqual(self.case.write_count,before)
+        self.assertEqual(self.case.scalar('SELECT state FROM fs_training_sessions'),'active')
+        self.assertEqual(self.lua.globals().deleteCount,1)
+        self.reload();self.assertTrue(self.controller.Start().ok)
+        self.assertEqual(self.case.scalar('SELECT state FROM fs_call_leases'),'released')
+        self.assertEqual(self.case.scalar('SELECT availability FROM fs_horses'),'stored')
+
     def test_delayed_stop_deletion_finishes_after_restart(self):
         self.call_and_bind()
         self.lua.execute('deleteDeferred=true')

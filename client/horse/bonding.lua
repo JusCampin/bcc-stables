@@ -102,12 +102,12 @@ RegisterNetEvent('bcc-stables:bonding:earned',function(p)
         or type(p.amount)~='number' or p.amount<1 or p.reason~='riding' and p.reason~='leading' then return end
     local r=H.GetActive()
     if r and r.generationId==p.generationId and r.id==p.horseId then
-        if Config.bonding.showXpMessage~=false then C.Message(C.Text('menu_bondingEarned',p.amount,C.Text('menu_bondingReason_'..p.reason),p.xp)) end
+        if Config.bonding.showXpMessage~=false then (C.Notify or C.Message)(C.Text('menu_bondingEarned',p.amount,C.Text('menu_bondingReason_'..p.reason),p.xp)) end
         G.NotifyLevel(p)
     end
 end)
 function G.NotifyLevel(value)
     if Config.bonding and Config.bonding.showLevelUpMessage~=false and value.training and (value.levelsGained or 0)>0 then
-        C.Message(C.Text('menu_trainingEarned',value.training.level))
+        (C.Notify or C.Message)(C.Text('menu_trainingEarned',value.training.level))
     end
 end

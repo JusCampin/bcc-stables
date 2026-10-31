@@ -110,6 +110,7 @@ function H.Whistle(mode)
         requestBusy = false
         if ok and result.code=='cleanup_pending' then
             C.Message('previous horse cleanup pending; wait for disappearance before whistling again.')
+        elseif ok and result.code=='horse_downed' then (C.Notify or C.Message)(C.Text('menu_horseDowned'))
         elseif not ok or not result.ok then C.Message('whistle refused: ' ..
             tostring(ok and result.code or 'transport_error'))
         elseif type(result.value)=='table' and result.value.relocated then C.Message('horse replacement requested.') end

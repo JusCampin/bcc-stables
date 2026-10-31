@@ -64,13 +64,13 @@ Config = {
     },
 
     bonding = {
-        enabled = false, -- Install database/feather_bonding.sql. Uninitialized horses start at zero XP.
+        enabled = false,            -- Install database/feather_bonding.sql. Uninitialized horses start at zero XP.
         showXpMessage = true,
         statRewardsEnabled = false, -- Install database/feather_progression.sql before enabling.
         xpPerLevel = 1000,
-        maxStatBonus = 2, -- Earned ranks per stat; native ranks never exceed 9.
+        maxStatBonus = 2,           -- Earned ranks per stat; native ranks never exceed 9.
         showLevelUpMessage = true,
-        careCooldownSeconds = 60, -- Per horse and action; care still works between XP awards.
+        careCooldownSeconds = 60,   -- Per horse and action; care still works between XP awards.
         xpRewards = {
             riding = 10,
             leading = 10,
@@ -79,10 +79,34 @@ Config = {
         },
     },
 
+    training = {
+        enabled = false, -- Install database/feather_training.sql; saved bonding required.
+        price = 3500,    -- Minor units: $35.00, charged only for a completed course.
+        currency = 'dollars',
+        dailyHorseXpLimit = 1000, -- All professional course rewards per horse, UTC day.
+        instructorModel = 's_m_m_valcowpoke_01',
+        control = 0x80F28E95, -- L beside the outdoor instructor.
+        courses = {
+            leading = {laps=1,secondsPerLap=120,minimumSeconds=15,radius=2.5,xp=75},
+            riding = {laps=2,secondsPerLap=150,minimumSeconds=30,radius=3.5,xp=112},
+        },
+    },
+
+    worldCare = {
+        enabled = false, -- Requires saved bonding and database/feather_world_care.sql.
+        drinkXp = 5,     -- Only a completed drink that restores cores; shares the care XP cooldown.
+        actions = {
+            drink = { minimumXp = 50, health = 20, stamina = 20, seconds = 15 },
+            rest = { minimumXp = 350, health = 5, stamina = 5, seconds = 5 },
+            sleep = { minimumXp = 1150, health = 10, stamina = 10, seconds = 5 },
+            wallow = { minimumXp = 2450, health = 0, stamina = 0, seconds = 8 },
+        },
+    },
+
     tack = {
-        enabled = false, -- Install database/feather_tack.sql and configure Inventory collections.
-        resaleEnabled = false, -- Enable after scoped Economy payout authorization is configured.
-        resalePercent = 50, -- Original paid price, reduced by current piece condition.
+        enabled = false,        -- Install database/feather_tack.sql and configure Inventory collections.
+        resaleEnabled = false,  -- Enable after scoped Economy payout authorization is configured.
+        resalePercent = 50,     -- Original paid price, reduced by current piece condition.
         tradingEnabled = false, -- Free/paid nearby trades; install feather_tack.sql and Economy scopes first.
     },
 
@@ -166,6 +190,9 @@ Config = {
     -----------------------------------------------------
 
     death = {
+        enabled = false,         -- Recoverable injuries and Inventory revivers.
+        reviveHealth = 25,       -- Saved core benefit; never a free full refill.
+        reviveStamina = 25,
         writheEnabled = true,    -- Down horses before death so they can be revived.
         persistentWrithe = true, -- Save the downed state through reconnects and restarts.
         deselectOnDeath = false, -- Require selecting another horse after death.
@@ -175,7 +202,7 @@ Config = {
 
     sales = {
         tradingEnabled = false, -- Nearby free/paid horse offers, optional equipped tack and bag contents.
-        enabled = false, -- Requires database/feather_horse_sales.sql and scoped Economy Issue permission.
+        enabled = false,        -- Requires database/feather_horse_sales.sql and scoped Economy Issue permission.
         -- Percentage of the catalog price returned when selling a purchased horse.
         purchasedHorsePriceMultiplier = 0.70,
     },

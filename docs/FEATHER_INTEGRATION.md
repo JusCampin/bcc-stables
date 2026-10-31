@@ -2679,3 +2679,648 @@ are live-confirmed. These logs do not independently establish instantaneous nati
 core preservation during a rank change or migrated-simulator rank application.
 Temporary riding reward restoration to 10 was requested, not yet confirmed.
 No runtime/config/SQL change or deployment is needed to record this result.
+
+
+## 2026-10-30 - Visible XP notifications and world care ready for live testing
+
+Global preference saved in C:/Users/jusca/.codex/AGENTS.md: proactively raise
+practical feature improvements and material tradeoffs across all repositories.
+
+Implemented shared Client.Notify using the verified feather-notify ShowNotification
+export (right, 4000 ms), retaining F8 output and safe fallback when unavailable.
+Riding/leading, feed/brush XP and permanent-level messages use it, preserving the
+independent showXpMessage/showLevelUpMessage settings. Care feedback reuses the
+helper rather than duplicating notification presentation code.
+
+New client/server horse/passive_care.lua modules restore original enter/loop/exit
+animations for natural-water drinking, resting, sleeping and wallowing. They do
+not load the legacy interactions/world_care scripts or revive legacy client writes.
+Config.worldCare defaults disabled. Controls reuse Config.controls drink U, rest V,
+sleep Z, wallow C and standOrWake G. Existing nearby target-menu input reader calls
+world input; there is no extra idle frame loop. During an action only, a bounded
+worker watches local native eligibility and an expiring server observation lease.
+Generation/observer/model/network identity, sequence high-water marks and simulator
+control fence stale or reordered execution/stop packets. Death/mounting/leading,
+missing animations, walking away, ownership migration, store and resource stop
+cancel safely. Exits retain generation identity and cannot overwrite a newer action.
+
+Default saved-XP unlocks: drink 50, rest 350, sleep 1150, wallow 2450. These are
+explicit server policy thresholds in Config.worldCare.actions. Completed drinking
+restores 20/20 core points after 15 seconds of observed loop and awards up to 5 XP
+only when actual saved cores improve, under the existing care XP cooldown policy.
+The new last_drink_at field keeps its cooldown separate from feeding/brushing.
+Rest restores 5/5 every five seconds and sleep 10/10. Rest/sleep give no XP to avoid
+stationary XP farming; wallow is an eight-second animation without a core/XP reward.
+Entry animations do not count as reward time. A full rest/sleep keeps observing
+eligibility without repeated SQL until native cores drop; wallow awards perform no
+SQL. Natural-water presence/animation/life/occupancy observations come only from the
+current simulator. Server coordinates, stationary position, owner proximity, saved
+ownership, timer and one-use response ticket bound when rewards can be attempted.
+No client XP or benefit totals are accepted. Native observations remain a trust
+boundary, as with the existing care adapter; no server water/animation native is
+assumed. Trough/hay prop reservations/positioning are deferred.
+
+World benefits reuse Feeding.Capture for depletion and the existing character lock,
+condition revision and saved-core delivery event. Condition change and drinking XP
+commit together. No transaction spans an animation. Unknown commits stop instead
+of retrying an unreceipted reward; requiredConditionRevision is set before commit
+so stale native depletion cannot erase a committed but undelivered benefit. The
+next normal checkpoint can request saved-core redelivery. Worker state is transient;
+committed condition/XP and drinking cooldown survive restart. No new table/ledger,
+provider capability or diagnostic command family was added.
+
+Deployment: all changed runtime files in bcc-stables plus its manifest; merge only
+new Config.worldCare and retain existing server-specific settings. Install
+C:/coding/bcc-feather-scripts/bcc-stables/database/feather_world_care.sql in the
+existing Stables database before enabling; it adds last_drink_at to fs_horse_bonding.
+The base feather_bonding.sql includes the field for fresh installs. Schema-11
+checksums/version are unchanged. No provider configuration grants are required.
+Ensure feather-notify is running for visible messages. New runtime scripts require
+server refresh, then restart bcc-stables, then BccStablesStatus.
+
+Source root C:/coding/bcc-feather-scripts/bcc-stables; copy each runtime file to
+its matching path beneath server resource bcc-stables:
+fxmanifest.lua; client/core/feather.lua; client/core/locale.lua;
+client/horse/bonding.lua; client/horse/feeding.lua; client/horse/target_menu.lua;
+client/horse/passive_care.lua; server/core/boot.lua; server/horse/bonding.lua;
+server/horse/controller.lua; server/horse/feeding.lua; server/horse/whistle.lua;
+server/horse/passive_care.lua. Config source config/settings.lua is merge-only.
+Documentation/tests/base fresh-install SQL do not need server deployment.
+
+Live gate: before copying, player F8 BccStablesHorseStore and confirm disappearance.
+After SQL/config/files and server refresh/restart/status, player F8
+BccStablesHorseCall. Ride/lead to a normal XP award and verify a visible localized
+notification. Beside the dismounted, unled idle horse, test U in natural water;
+V rest then G stand; Z sleep then G wake; C wallow then automatic exit. On Matilda
+at 1060 XP, sleep/wallow are locked by default; optionally use temporary minimumXp=0
+for those two actions solely for the test, then restore 1150/2450 after storing
+and restart bcc-stables. Check depleted cores recover, walking away cancels,
+store/recall preserves committed cores/XP, and network migration cancels without
+duplicate reward. Finish BccStablesHorseStore and confirm disappearance.
+
+Automated validation: 440 Stables tests pass, including actual SQL condition/XP
+rollback, timed/entry/stop/no-early reward, repeated-drink cooldown, full-core SQL
+suppression, lost benefit commit reply fencing, invalid/wrong simulator/animation/
+water observations, migration/distance/timeouts, original animation transitions,
+mount/death cleanup, delayed-start fence, orphan-worker expiry, native low-core
+observations, input payload and notification toggle/fallback checks. Live RedM
+animations and gameplay acceptance remain pending; no live locking certification.
+No version bump, staging, commit or push performed.
+
+
+## 2026-10-30 - World-care animation and target-prompt corrections
+
+Live feedback: user reported drinking did not animate and other transitions were
+jittery despite playing. Their logs show riding XP 1060 -> 1070 and store/recall
+restored saved cores 100/100 at condition revision 9, confirming committed recovery
+persisted. The logs do not establish a completed drinking benefit or final physical
+horse disappearance. User requested original target prompts and specifically
+preferred mounting/whistling to stand/wake instead of an extra control.
+
+Compared the preserved client/horse/interactions.lua and prompts.lua with the
+original C:/coding/bcc-scripts/bcc-horses implementation. Dictionary/clip names
+were already the same. Corrected differences in playback: preload both entry and
+loop dictionaries before entry, use original 2500 ms fallback for zero/invalid
+GetAnimDuration, retain actual positive clip duration without ten-second truncation,
+block normal horse targeting with original flags 297/301/412 while active, and play
+stand/quick exits before clearing tasks. Rest/sleep entry cancellation uses original
+quick_exit/quick_exit; flags and tasks restore only after the matching exit finishes.
+The drinking interaction retains its native-verified initial water context, matching
+the original start-time water check, while server identity/proximity/root-position
+checks still constrain the action. Target Drink is disabled outside natural water.
+
+Loading and transition blends get bounded startup grace with no reward. Entry time
+never counts as restoration time. Server permits bounded entry root shift and pins
+the stationary origin when the observed loop first starts; the strict loop movement
+limit is unchanged. Native animation observations briefly wait through blends before
+refusing them. Original dictionaries and new protocol still require live RedM checks;
+these corrections are not claimed live-confirmed.
+
+Drink/Rest/Sleep/Wallow custom prompts now join the native target entity group using
+original IsPlayerTargettingEntity and PromptGetGroupIdForTargetEntity natives.
+Completed prompt actions replace free-floating raw care keys. Visibility follows
+exact owned-horse target, on-foot/range/NUI eligibility; text refresh every 500 ms
+honors player language changes without per-frame translation exports. Prompt handles
+are reused, rebound to replacement horses and deleted on resource stop. Server XP
+unlock policy remains authoritative. No new control or Stand/Wake prompt remains.
+
+While care is active, the existing nearby input reader intercepts normal INPUT_ENTER
+mount attempts, matching original deferred-mount behavior. It requests cancellation
+then waits for an exact-sequence stand-up acknowledgement from the current simulator
+through world_exit.v1 before TaskMountAnimal. It rechecks generation, player, life,
+NUI focus, occupancy and distance. Timeout or stale acknowledgements never mount.
+Whistles queue their normal approach/follow intent until that same exit acknowledgement.
+The latest mount/whistle intent cannot issue competing movement and mount tasks.
+All exit tickets are process-local, bounded, cleaned on lifecycle cancellation and
+observed through the existing controller tick; no new background monitor, DB table
+or schema change. The server does not treat a cancel request as completed standing.
+
+Required update from the preceding world-care test build, local source root
+C:/coding/bcc-feather-scripts/bcc-stables, to matching server bcc-stables paths:
+client/horse/passive_care.lua; client/horse/target_menu.lua; client/core/locale.lua;
+server/horse/passive_care.lua; server/horse/whistle.lua.
+No manifest/config/database changes for this correction. Existing temporary XP gates
+may remain for this retest. No refresh or full server restart is needed.
+Before copying: player F8 BccStablesHorseStore and confirm disappearance.
+After copying: server console restart bcc-stables, then BccStablesStatus.
+Player F8 BccStablesHorseCall. On foot, right-click/target the horse and use the care
+prompts. Drink should be disabled on land; stand the horse in natural water to test
+entry/loop/exit. Test rest/sleep/wallow transitions; whistle to stand then approach/
+follow, and attempt mounting during rest/sleep to stand then mount. Confirm no extra
+Stand/Wake prompt, no early reward, normal target prompts restored, and mounted input
+never starts care. Finish BccStablesHorseStore and confirm disappearance.
+Docs/tests are optional development artifacts and need no deployment.
+
+Validation: 450 automated Stables tests pass, including added zero/long clip duration,
+entry quick-exit, original loop preload, retained initial water context, target-only
+prompts/land drinking refusal, remote-owner deferred mount, exact exit sequence,
+mount refusal after timeout/death, delayed whistle movement, loading/long-entry
+no-early rewards and entry root shift/loop movement fencing. Live acceptance pending.
+No version bump, staging, commit or push performed.
+
+
+## 2026-10-30 - Transition pose handoff and explicit care prompt ordering
+
+User still observes unwanted movement at entry/exit and preferred the original
+prompt ordering. Verified original bcc-horses/config/settings.lua against current
+settings: Drink U 0xD8F73058, Rest V 0x620A6C5E, Sleep Z 0x43CDA5B0 and Wallow C
+0x9959A6F0 are unchanged. Original prompt registration sequence is likewise Drink,
+Rest, Sleep, Wallow. Input-type sorting, not creation order alone, determines native
+prompt placement. The care group now registers all four handles before processing
+any completed action and explicitly assigns known sort inputs for Drink/Rest/Sleep/
+Wallow top-to-bottom without changing the real action controls. Registration uses
+UiPromptSetOrderingAsInputType (0x2F385ECC5200938D), verified against primary prompt
+research: https://gist.github.com/umaruru/1cdbfc302dda20d8c5601f0ce8f0e03c .
+
+Potential transition gap addressed: non-loop entry/exit clips previously used flag
+0, allowing idle before the next task/cleanup. They now use AF_HOLD_LAST_FRAME=2;
+the loop remains flag 3. Entry checking still uses bounded eligibility polling but
+switches to per-frame waits for the final 100 ms, avoiding the coarse handoff delay.
+No root reposition/teleport, extra animation or new control was added. Dictionaries,
+blend speeds, original quick exits and acknowledgement-gated whistle/mount remain.
+Flag reference: https://github.com/Halen84/RDR3-Native-Flags-And-Enums/blob/main/eScriptedAnimFlags/README.md .
+This is a targeted correction for the inferred idle-pose gap, not a live-confirmed
+explanation of all visual movement; actual RedM smoothness/order still needs retest.
+
+Validation: 452 Stables tests pass, including transition hold flags/frame-precision
+handoff and complete prompt registration with explicit visual sort and unchanged
+control bindings. No schema/config/manifest/server code changes in this increment.
+
+Required runtime copy for this increment only:
+C:/coding/bcc-feather-scripts/bcc-stables/client/horse/passive_care.lua
+-> server-relative bcc-stables/client/horse/passive_care.lua.
+Before copying: player F8 BccStablesHorseStore and confirm disappearance.
+After copying: server console restart bcc-stables; player F8 BccStablesHorseCall.
+Target the horse to inspect ordering and repeat the same entry/exit actions,
+including whistle and mount exits. Finish player F8 BccStablesHorseStore and
+confirm disappearance. No refresh, SQL/config/provider update or full server
+restart needed; docs/tests are optional development artifacts, not deployment.
+No version bump, staging, commit or push performed.
+
+
+## 2026-10-30 - Show Info ordering and native Pat clarification
+
+User screenshot shows all four care actions above native Show Info, with Pat grey
+while the character appears to be patting the horse. User states everything else
+looks good, accepting the latest general animation/prompt behavior; no separate
+new drinking-XP or final disappearance evidence is claimed.
+
+Lowered only custom care ordering inputs from quick-select slots to the documented
+context-input band (Drink CONTEXT_Y, Rest CONTEXT_X, Sleep CONTEXT_A, Wallow
+CONTEXT_B), intended to place native Show Info above care. Actual U/V/Z/C bindings
+are unchanged. Native Lead/Pat/Flee are retained. The engine's final interleaving
+needs a live screenshot/check; the patch does not replace the native Show Info UI.
+Native sort reference: https://gist.github.com/umaruru/1cdbfc302dda20d8c5601f0ce8f0e03c .
+
+Audited current controller/target/passive-care controls: no G/Pat input disable or
+Pat prompt override exists. The legacy standOrWake setting is not read by active
+care input. Pat is engine-controlled; the screenshot suggests an ongoing pat
+interaction, so temporary native busy-state greying is the likely explanation,
+not yet a confirmed diagnosis of persistent greying. Preserve the native guard and
+check availability once idle rather than force-enable an engine-busy interaction.
+
+Validation: all 15 targeted passive-care client tests pass, including unchanged
+real controls with the lower visual-sort positions. No new runtime scripts,
+manifest/config/schema/provider changes. From the preceding deployed build, copy
+C:/coding/bcc-feather-scripts/bcc-stables/client/horse/passive_care.lua
+-> server-relative bcc-stables/client/horse/passive_care.lua only.
+Before copying, player F8 BccStablesHorseStore and confirm disappearance. Server
+console restart bcc-stables; player F8 BccStablesHorseCall. Target the horse and
+check Show Info first and Pat once both player/horse are idle; no need to repeat
+previous animation acceptance. Finish BccStablesHorseStore and confirm disappearance.
+No refresh/full server restart/SQL/config updates needed. Docs/tests are optional
+and need no deployment. No version bump/staging/commit/push performed.
+
+
+## 2026-10-30 - Care prompt grouping after native interleaving check
+
+User screenshot confirms Q,E,U,G,V,Z,F,C under the context-band mapping; Pat is
+now enabled. Changed only care sort inputs to the native Show Info control band,
+INPUT_INTERACT_LOCKON_TARGET_INFO (0x31219490), retaining U/V/Z/C action bindings
+and complete Drink/Rest/Sleep/Wallow registration. Intent is Q,U,V,Z,C,E,G,F;
+engine tie ordering remains unverified and needs a screenshot, not a claimed fix.
+Primary control reference: https://github.com/femga/rdr3_discoveries/blob/master/Controls/README.md .
+All 15 targeted client tests pass. Deploy client/horse/passive_care.lua only from
+C:/coding/bcc-feather-scripts/bcc-stables to the same server bcc-stables path;
+store/confirm disappearance, copy, server restart bcc-stables, player call/check
+order/store/confirm disappearance. No refresh/config/SQL/provider changes.
+Docs/tests require no deployment. No staging, commit, push or version bump.
+
+
+## 2026-10-30 - Shared-slot prompt ordering rejected by live result
+
+Latest screenshot shows Z,U,Q,C,V,E,G,F. Equal Show Info sort values do not produce
+stable registration-order ties, disproving the previous experiment. Exact requested
+Q,U,V,Z,C,E,G,F remains unresolved. Reviewed documented ordering/priority APIs;
+no verified exact eight-row mapping was found while retaining the native actions.
+Do not describe the shared-slot experiment as accepted or ship more guessed values.
+Asked user to choose a stable native layout (recommended) or broader custom prompt
+presentation for exact ordering. No new runtime changes/deployment requested yet.
+Animation behavior is separate and remains accepted from earlier user feedback.
+
+
+## 2026-10-30 - Stable native prompt layout restored by user choice
+
+User chose restoring the stable native layout over a custom prompt layer.
+Restored distinct context-input care sort slots, previously observed live as
+Q,E,U,G,V,Z,F,C. Shared-slot experiment is removed. Native actions, real U/V/Z/C
+bindings, accepted animation changes and whistle/deferred-mount exits are unchanged.
+Exact Q,U,V,Z,C,E,G,F is no longer the active ordering objective.
+All 15 targeted client tests pass. Incremental runtime deployment is only
+C:/coding/bcc-feather-scripts/bcc-stables/client/horse/passive_care.lua to
+server-relative bcc-stables/client/horse/passive_care.lua. Player F8 HorseStore
+(BccStablesHorseStore), confirm disappearance, copy, server restart bcc-stables,
+then player BccStablesHorseCall to inspect; finish BccStablesHorseStore and confirm
+disappearance. No refresh/config/SQL/provider changes or animation retest required.
+Docs/tests are optional and need no server deployment. No commit/push/version bump.
+
+
+## 2026-10-30 - Untouched native prompt sorting test
+
+At user request, removed the care promptOrder table and the ordering-as-input-type
+native call. Prompts now use their real Config.controls inputs for default engine
+sorting. Exact layout is unverified until the next screenshot; no guessed order is
+claimed. Registration, controls, animations and native actions are unchanged.
+All 15 targeted client tests pass, including no ordering override calls.
+Deploy only C:/coding/bcc-feather-scripts/bcc-stables/client/horse/passive_care.lua
+to server-relative bcc-stables/client/horse/passive_care.lua. Player F8
+BccStablesHorseStore/confirm disappearance, copy, server restart bcc-stables,
+player BccStablesHorseCall and target horse to inspect default order. Finish
+BccStablesHorseStore and confirm disappearance. No refresh/config/SQL/provider
+changes. Docs/tests need no deployment; no commit/push/version bump performed.
+
+
+## 2026-10-30 - Default prompt order observed live
+
+User screenshot after removing all care sorting overrides shows top-to-bottom:
+Drink U, Rest V, Show Info Q, Sleep Z, Wallow C, Lead E, Pat G, Flee F.
+This is the observed untouched native sorting for the current setup, not the
+previous requested exact ordering. Pat is available; Drink is grey on land.
+No new runtime changes, deployment or commands are required for this record.
+Retain no ordering overrides unless the user requests another change; user has
+not explicitly accepted the default ordering yet.
+
+
+## 2026-10-30 - Default prompt layout accepted; next recommendation
+
+User accepted untouched native order U,V,Q,Z,C,E,G,F. Keep sorting overrides removed;
+no more prompt-order work is planned. Recommended next slice is horse injury/downed
+persistence and Inventory-backed revival, before professional training/abilities.
+Current active controller still sets horses invincible and the old death.lua is
+not loaded. Reuse original behavior while fencing lifecycle/restart bypasses and
+preserving tack/cargo. Recovery by default, permanent death optional. This is a
+recommendation only; implementation has not started and no deployment is needed.
+
+## Recoverable horse injuries - 2026-10-30 (ready for live testing)
+
+- Config.death.enabled defaults false. With it enabled, only bound horses lose
+  spawn invincibility. Persistent writhe is required; permanent death is refused.
+- The current simulator observes death/writhe locally every 500 ms. Server
+  generation/observer/sequence and current ownership checks authorize an atomic
+  alive -> downed biological-state change. Store's occupancy reply also checks
+  injury before deletion. Committed injuries survive store/recall and restart;
+  an abrupt process loss before an observation commits cannot persist that event.
+- Existing fs_horses.revision identifies the active injury for revival. No new
+  schema table or schema-migration ledger entry. Downed horses remain in the
+  roster and count toward capacity; tack/cargo are unchanged. Calls restore
+  writhe. Riding, native leading, whistle tasks, world care and new food/brush
+  use are blocked while downed. Already consumed care can settle without XP.
+- Use consumable_horse_reviver on foot within 2.5 metres of the owned downed
+  horse. Original TaskReviveTarget animation runs 5.5 seconds. Existing Inventory
+  consumption receipts and care slots settle one reviver and one biological /
+  condition benefit in the same Stables transaction. Cancellation uses the same
+  receipt key. Recovery never consumes another item. Default saved core benefit
+  is +25 health / +25 stamina, capped at 100; revival gives no bonding XP.
+- Native recovery is fenced by the injury revision marker so a later injury
+  cannot be healed by an old state packet. Control migration routes state to the
+  current simulator. World-care entry/exit workers cannot overwrite writhe.
+- Inventory config needs purpose stables.revive.v1 with
+  consumable_horse_reviver=true for bcc-stables. Existing reviver seeds had
+  usable=0: execute database/feather_injuries.sql in the game database before
+  restarting Inventory. New installations use feather_items.sql first.
+- Runtime deployment: copy client/, server/ and fxmanifest.lua from this
+  resource; merge the death block in config/settings.lua. Merge the new scope
+  from feather-inventory/config.lua. Do not overwrite live server settings.
+  Server console order: refresh; restart feather-inventory; restart bcc-stables;
+  BccStablesStatus. No full server restart or schema migration is required.
+- Offline: 471 tests pass, including 19 injury tests for SQL rollback/lost reply,
+  receipt replay, late store observation, downed recall reservation, current
+  simulator checks and native state guards. SQLite/native doubles do not certify
+  live MariaDB concurrency or RedM animation/physics. Live acceptance is pending.
+- Live gate: injure an owned horse, store/recall and resource-restart it while
+  downed; it must remain injured. Walk away during a reviver use (no loss), then
+  complete use (exactly one loss), ride and store/recall. Verify tack and bag
+  contents remain. Repeat with another client holding network control.
+### Native Revive prompt follow-up (2026-10-30)
+
+The primary revival interaction is now the native horse Revive prompt, using
+original Horses INPUT_REVIVE handling for the current downed target. The shared
+nearby-horse reader handles this even when Cargo/Flee/world-care are disabled.
+The client sends only generationId; server-side Inventory membership lookup
+selects the owned reviver instance and reuses the same durable care receipt.
+Missing items and stale calls cannot consume or revive. Inventory Use remains
+an optional equivalent entry point, not a required player step. Live acceptance
+should activate the native Revive prompt rather than opening Inventory.
+475 offline tests pass; native prompt rendering/animation is live pending.
+No additional manifest, configuration or SQL changes beyond the injury build.
+### Temporary weapon-free injury test (2026-10-30)
+
+Added server-console-only BccStablesInjuryTest <playerServerId>. It requires the
+injury feature, a current character/live horse, and a successful dismounted /
+unled occupancy observation. It calls the existing persistent Injuries.Down
+path and dispatches state to the current simulator. Player-console calls and
+invalid, disabled, absent or occupied targets cannot down a horse. This verifies
+injury persistence/native writhe/revival without Weapons; it does not test
+weapon-damage detection. Remove this temporary command after live acceptance.
+18 focused server injury tests pass, including the two command guard tests.
+Only server/horse/injuries.lua must be recopied for this addition, followed by
+restart bcc-stables. No manifest, SQL, Inventory or configuration changes added.
+### Live revival RPC correction (2026-10-30)
+
+User confirmed downed horse and native Revive prompt render, but revival returned
+unconfirmed. Found and fixed reversed Core RPC arguments in both injury-report
+and revive registrations: adapters now pass payload/source to internal
+source/payload methods explicitly. Added registration-level regression tests
+that invoke both handlers exactly as Core does; 20 focused server injury tests
+pass. Earlier direct service tests did not cover this boundary. Live revival
+acceptance remains pending. Recopy server/horse/feeding.lua and injuries.lua;
+restart bcc-stables, then recall the saved downed horse and use native Revive.
+No manifest, configuration, Inventory or SQL changes for this correction.
+### Revival animation handoff (2026-10-30)
+
+User confirmed native-prompt revival succeeds: condition 0/0 revision 10 became
+25/25 revision 11, with recovered feedback. Reported a snap near animation end.
+Found redundant ResurrectPed + ClearPedTasksImmediately at committed recovery.
+Living horses now retain TaskReviveTarget's transition; only remaining writhe
+uses normal ClearPedTasks, and only a dead actor is resurrected. Core/receipt
+logic is unchanged. Eight client injury tests pass, including completed native
+revive receiving no resurrection/task reset. Visual acceptance is pending.
+Deploy only client/horse/injuries.lua and restart bcc-stables; no refresh, SQL,
+Inventory or configuration changes. Re-down the current unoccupied horse with
+BccStablesInjuryTest <playerServerId>, then retry the native Revive prompt.
+### Intermittent revival cancellation (2026-10-30)
+
+User reports first attempt stood up then returned to writhe with cancellation;
+second attempt succeeded (50 health / 25 stamina, condition revision 13). Cause
+is not established. Recovery transaction succeeds, but cancellation remains
+unexplained. Added precise client eligibility cancellation reasons in F8 and
+server-side lifecycle/start/occupancy cancellation reasons, keyed by operationId.
+No eligibility radius/timing relaxation or consumption policy change. 45 feeding
+and 20 server injury tests pass. Next cancellation needs those reason logs before
+changing guards. Deploy client/horse/feeding.lua and server/horse/feeding.lua,
+then restart bcc-stables; no manifest, SQL, Inventory or config changes.
+### Live revival repeat confirmation (2026-10-30)
+
+User confirms the next attempt worked normally. Native Revive completed with
+recovered feedback; saved condition moved from health 50 / stamina 25 revision
+13 to health 75 / stamina 25 revision 15. The intermittent cancellation did not
+recur, so its cause remains unproven; keep the cancellation reason logging for
+now. No further animation issue was reported on this attempt. Final store /
+physical disappearance for this live call has not yet been confirmed. Weapon
+lethal-observation and migrated-simulator revival acceptance remain separate
+pending tests. No code or deployment changes for this confirmation.
+### Live revival after network-control migration (2026-10-30)
+
+Owner source 2 / character e5e9955d-c29e-11f1-9ae2-e0d55eaa2deb called horse
+f40347e7-d345-11f1-9ad4-e0d55eaa2deb, generation
+5ff42794-d4d7-11f1-99a9-e0d55eaa2deb, netId 89. Status before and immediately
+after BccStablesInjuryTest 2 confirmed networkOwner=3, active identity matching.
+User reports native revival completed successfully (saved condition 88/25,
+revision 17) and final store physically removed the horse. This confirms injury
+handling on a migrated simulator and successful subsequent revival/cleanup.
+No post-revival status was supplied, so ownership remaining on source 3 for the
+entire revival is not independently established. Do not describe that stronger
+claim as confirmed. Weapon damage detection remains untested. No code changes.
+### Temporary injury command removed (2026-10-30)
+
+At user request, removed BccStablesInjuryTest and its two command-specific tests.
+No injury/revival production behavior was removed. 26 remaining server/client
+injury tests pass. The command no longer exists in runtime or test sources;
+older command instructions above are historical and no longer apply. Recopy
+server/horse/injuries.lua and restart bcc-stables. No manifest refresh, SQL,
+Inventory or configuration changes are required. Weapon-damage live acceptance
+remains pending until the Weapons test can be performed.
+### Horse abilities consolidation audit (2026-10-30)
+
+Read the original bcc-horse-abilities manifest, configuration, README and both
+runtime files, plus Stables' saved bonding/native application and Inventory's
+durable wear implementation. Original feature inventory: Flaming Hooves only;
+diamond item, 120-second duration, 600-second per-character in-memory cooldown,
+bonding level 4, durability 100 with 5 wear, warning at 10 seconds, optional
+fortified health/stamina, fear resistance and activation rear.
+
+Integration findings:
+- VORP dependencies, numeric horse/character IDs and bcc-horses exports must be
+  replaced with Stables UUID ownership/session/generation and current simulator.
+- Original server trusts claimedLevel; unlock must derive from canonical saved
+  bonding XP. Reuse the existing XP pool; no second ability XP/stat progression.
+- Original golden-core loop writes 100 every second. Proposed default is temporary
+  fortification only, with no automatic core refill or permanent stat changes.
+- Existing Bonding.Apply owns fear flags 113/312 and periodically reapplies them.
+  Ability effects need one overlay/reconciliation point so progression does not
+  erase active fear resistance and expiry restores current bonding behavior.
+- Original cooldown resets on resource restart. A paid/worn activation needs a
+  durable operation receipt and cooldown, including lost acknowledgements; reuse
+  Inventory wear receipts rather than adding another consumption provider API.
+- Use Inventory's supported condition metadata key, preserving diamond item name.
+  Diamond is currently stackable; verify per-unit instances and metadata wear
+  semantics rather than changing unrelated diamond definitions or stack limits.
+- Cancel effects on injury, storage, lost session, resource stop and expiry;
+  simulator migration must preserve the original deadline, not start a new timer.
+- Localized player messages use feather-settings through existing Core locale
+  integration with English fallback. The standalone ability resource must not
+  also register the same item after consolidation.
+
+Material choice asked: retain Flaming Hooves/diamond wear without free core
+refills (recommended), retain all original effects, or begin with native riding
+maneuvers. No ability runtime/config/schema changes made pending that direction.
+Professional training remains separate work; its course XP should feed the same
+saved XP/progression path when integrated. This audit is not a live-test handoff.
+## NPC professional training integration - 2026-10-30 (ready for live testing)
+
+User chose to defer Flaming Hooves and proceed with professional training.
+Integrated the NPC instructor / leading / controlled-riding slice into Stables;
+player-trainer jobs, proposals and payments remain deferred. No ability effects
+or diamond consumption were enabled.
+
+- Preserved all seven original surveyed grounds (Valentine, Blackwater,
+  Strawberry, Lemoyne, Saint Denis, Van Horn, Armadillo), polygon boundaries,
+  checkpoints and local lap overrides in config/training_locations.lua.
+- Config.training defaults disabled. Existing saved bonding must be enabled.
+  Defaults: $35.00 on successful completion (3500 minor units), leading one lap /
+  120 seconds / up to 75 XP, riding two laps / 150 seconds per lap / up to 112 XP.
+  Original time-based 60-100 scoring scales rewards. Daily professional XP cap
+  is 1000 per horse across courses, using UTC days. Admission checks the cap;
+  completion reserves only the remaining allowance before payment.
+- Native L prompt at streamed outdoor instructors opens feather-menu-v2 course
+  choices/terms. Server progress drives the original marker presentation. No new
+  command family. Storing cancels an unfinished course; no item requirement.
+- Server captures immutable fee/course/session/horse terms. Current simulator
+  observes riding/leading and living actors against exact generation/observer,
+  player-ped/network identity and a single-use sequence. Server verifies ordered
+  checkpoint positions, boundaries, time, speed and minimum completion duration.
+  Migration replaces outstanding observations without restarting course time.
+- Ordinary riding/leading XP is suspended during a course. Successful course XP
+  goes through Bonding.Course inside the completion transaction, using the same
+  saved total and bounded permanent stat advancement. No separate ability or
+  training XP pool and no core refill. Current simulator restores saved ranks.
+- Optional database/feather_training.sql adds fs_training_sessions without
+  changing the original schema-11 migration ledger. Unfinished courses cancel
+  on restart. Completed obligations use Economy Transfer with the exact stable
+  operation ID, then atomically award XP and mark completion. Lost replies,
+  rollback, disconnect after the final verified checkpoint and replay cannot
+  duplicate payment/XP. Owed XP may settle on a subsequently downed horse without
+  reviving it. Pending obligations fence calls/stable trading; disabling new
+  training does not discard existing payment/reward obligations.
+- Existing bcc-stables Economy trustedTransactors access is sufficient. No new
+  IssueReasons/service grant, Inventory changes, items or provider code changes.
+- Player text uses existing Core/feather-settings locale resolution, English
+  fallback, and the verified feather-core:locale:changed event. Open course
+  menus and blip labels refresh when player language changes.
+- Validation: full offline suite 502 passing; 24 focused training tests pass
+  after final simulator-rank delivery integration. Tests cover real SQLite SQL
+  for one payment/reward, cancellation, insufficient funds, lost replies and
+  commit acknowledgements, restart/disabled-feature recovery, daily limits,
+  progression, stale/foreign simulator replies, migration, marker presentation
+  and client payload rejection. Live RedM/MariaDB acceptance remains pending.
+
+Deployment: copy this resource's client/, server/, shared/, fxmanifest.lua and
+config/training_locations.lua to matching bcc-stables server-relative paths.
+Merge the training block from config/settings.lua, preserving server settings,
+and set Config.training.enabled=true (Config.bonding.enabled must remain true).
+Execute database/feather_training.sql in the game database. Keep the standalone
+bcc-horse-training and bcc-horse-abilities resources stopped. Server console:
+refresh; restart bcc-stables; BccStablesStatus. No full server/provider restart.
+Do not copy docs, tests or .git for runtime testing.
+
+First live gate: call a healthy horse (player F8 BccStablesHorseCall), lead it to
+Valentine's outdoor instructor at -381.63, 775.57, 116.09, open Horse Training
+with L, and complete Leading Course markers. Confirm one $35 fee, one XP reward
+and unchanged saved-core policy. Try a mounted riding course, then cancel an
+unfinished course using player F8 BccStablesHorseStore: no fee/reward. Finish by
+storing the horse and confirming physical disappearance. Further gates include
+simulator migration, daily cap and restart recovery; do not call them live-passed
+based only on offline results.
+### First training live feedback and corrections (2026-10-31)
+
+User reported repeated Leading Course cancellation after checkpoints 2-5,
+possibly around 30 seconds, and floating markers. No paid completion has yet
+been accepted live. Code uses a 120-second leading limit, not a 30-second course
+limit; the actual cancellation cause was not captured by previous generic text.
+
+Changes: visible markers now use the original GetGroundZFor_3dCoord approach,
+cached per checkpoint with bounded retry and no floating fallback. Authoritative
+checkpoint checks use horizontal distance plus an eight-metre vertical guard,
+so surveyed heights do not prevent grounded checkpoint acceptance. The horse
+gets 1.5m boundary tolerance; the leading owner gets 4m to allow trailing behind
+at turns. A brief excursion pauses progress and must persist three seconds to
+cancel; original initial entry grace and course duration remain. All cancellation
+paths now identify boundary, timeout, lost interaction, missing observations,
+invalid movement or actor/session changes, with operation/checkpoint/elapsed
+console evidence. No fee/reward for these unfinished cancellations.
+
+At the user's supplied coordinates, Valentine's instructor and start admission
+now use vector4(-381.129, 765.596, 116.077, 221.393). Course checkpoint routes are
+preserved. 27 focused training tests pass, including more than 30s remaining
+active, grounded-height acceptance with a vertical limit, brief versus sustained
+boundary departure, and grounded marker placement. Live acceptance is pending.
+
+Deploy matching server-relative paths for client/horse/training.lua,
+server/horse/training.lua, shared/training.lua, client/core/locale.lua and
+config/training_locations.lua from this resource. Store the active horse in
+player F8 (BccStablesHorseStore), confirm disappearance, restart bcc-stables in
+server console, then player F8 BccStablesHorseCall. Lead to the new instructor,
+press L and retry Leading Course. Any cancellation should now supply its reason.
+No refresh, schema, configuration settings or provider changes for this update.
+### Leading course live acceptance (2026-10-31)
+
+After grounding/boundary/NPC relocation changes, user ran Leading Course twice
+and confirmed both worked. Each run advanced through all five checkpoints,
+entered payment/XP settlement and reported +75 XP, score 100/100, fee 35.00 Cash.
+No early cancellation was reported. Logs establish reported completion terms;
+independent wallet-balance verification and store/recall saved-XP verification
+were not included in this message. Mounted riding, interruption, daily-limit and
+restart/migration live gates remain pending. No code/deployment change for this
+confirmation. Next verify the mounted riding course and saved progression.
+### Controlled riding and saved XP live acceptance (2026-10-31)
+
+User completed Controlled Riding through all ten checkpoints (two Valentine
+laps). Completion reported +112 XP, score 100/100, fee 35.00 Cash. After store
+and recall, saved bonding XP restored as 1332, bonding level 3/4, exactly
+1070 + 75 + 75 + 112. Condition remained health 88 / stamina 25 revision 17;
+training introduced no core refill. User also confirmed horse disappearance.
+Independent wallet delta was not explicitly supplied. Leading, riding and saved
+progression now have live confirmation. Interrupted-course/no-fee behavior,
+daily cap, restart settlement and simulator migration remain separate live gates.
+No runtime/deployment changes made for this acceptance record.
+### Live unfinished-course cancellation acceptance (2026-10-31)
+
+User stored the horse during an unfinished course. Client reported training ended
+without reward/fee, then store pending; user confirmed physical disappearance.
+This confirms interruption via store and cleanup. Daily-cap and resource-restart
+interruption tests are next. Use a temporary server-only dailyHorseXpLimit=1 to
+exercise refusal without many courses, then restore 1000 before the restart test.
+No repository runtime defaults or code changed for this test preparation.
+### Resource-stop/training lifecycle regression (2026-10-31)
+
+Live daily-cap refusal passed at saved XP 1332. After restoring the cap, user
+restarted Stables during an unfinished leading course. Recall returned horse_busy;
+status showed ready, no live calls or cleanup proofs. MySQL reported an exec
+interrupted by resource stop with unavailable consumer callback.
+
+Found the regression: HorseController.Stop called cancel(r), and the newly added
+training cancellation hook could yield to SQL before native deletion / process-
+local proof journaling. Stop now calls cancel(r,true), skipping only SQL-backed
+training cancellation. Training.Start already cancels unfinished durable courses.
+Normal store/disconnect cancellation still uses its existing cleanup path.
+Added a regression with a real training module: stop performs zero SQL writes,
+deletes the observed horse, saves the proof and releases the call on restart.
+The full offline suite passes (506 tests). Live restart acceptance is pending.
+
+Deploy only server/horse/controller.lua to the matching bcc-stables path. The
+already-stuck reservation lacks its original observer receipt; same-process
+resource restart cannot safely release it. A one-time full FXServer process
+restart uses existing different-process recovery to restore the stored slot.
+Do not manually clear SQL or reset the process convar. After recovery, retry
+resource-only restart during an unfinished course to validate the fix. No
+manifest refresh, schema, Inventory, Economy or configuration change required.
+### Stuck-call recovery live confirmation (2026-10-31)
+
+Following the shutdown fix/recovery handoff, user successfully called the horse
+with saved XP 1332 (bonding 3/4), condition 88/25 revision 17, then stored it and
+confirmed physical disappearance. This confirms recall/storage are restored and
+saved progression is unchanged. The supplied logs do not include a course and
+resource-only restart after the fix; that specific regression live gate remains
+pending. No runtime/deployment changes for this confirmation.
+### Resource-only restart during course live acceptance (2026-10-31)
+
+After the shutdown fix, user started Leading Course, reached checkpoint 2/5,
+restarted bcc-stables, and successfully recalled the horse. Saved XP remained
+1332 (bonding level 3/4); condition stayed 88/25 revision 17. User then stored it
+and confirmed physical disappearance. This passes the specific resource-stop
+regression live gate and confirms no unfinished-course XP. No fee notification
+appeared; an independent wallet delta was not supplied. Leading, riding, saved
+progression, store cancellation, daily-cap refusal and unfinished-course resource
+restart now have live confirmation. Payment lost-ack recovery and simulator
+migration remain offline-tested with separate live gates if needed. No code or
+deployment changes for this acceptance record.

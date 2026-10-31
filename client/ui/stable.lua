@@ -856,7 +856,7 @@ renderDetails = function(s, horse)
     local mapping = Horses.ModelToBreedMap[horse.modelKey]
     local breed = mapping and Horses.BreedCatalog[mapping.breed]
     local coat = breed and breed.colors[horse.modelKey]
-    local status = horse.availability == 'stored' and 'stored' or horse.availability == 'active' and 'active' or
+    local status = horse.biologicalState=='downed' and 'downed' or horse.availability == 'stored' and 'stored' or horse.availability == 'active' and 'active' or
     'unavailableStatus'
     add('header', 'title', { value = C.Text('menu_details'), slot = 'header' })
     add('subheader', 'horse', { value = name(horse), slot = 'header' })
@@ -943,7 +943,9 @@ render = function(s, data)
     for index, row in ipairs(data.entries) do
         local key = 'horse-' .. index
         local label = name(row)
-        if row.availability == 'active' then
+        if row.biologicalState=='downed' then
+            label=label..' · '..C.Text('menu_downed')
+        elseif row.availability == 'active' then
             label = label .. ' · ' .. C.Text('menu_active')
         elseif row.availability ~= 'stored' then
             label = label .. ' · ' .. C.Text('menu_unavailableStatus')

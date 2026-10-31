@@ -82,7 +82,7 @@ local function read(session, horseId,includeAsset)
         or asset.metadata.stablesHorseId ~= row.horse_id or type(asset.owner) ~= 'table'
         or not F.IsUuid(asset.owner.interestId) or not F.IsRevision(asset.revision)
         or asset.revision < tonumber(row.asset_revision) then return invalid() end
-    if row.biological_state ~= 'alive' then
+    if row.biological_state ~= 'alive' and row.biological_state~='downed' then
         return F.Error('horse_unavailable', 'The selected horse is not alive.')
     end
     if row.availability ~= 'stored' and row.availability ~= 'active'
@@ -102,7 +102,7 @@ local function read(session, horseId,includeAsset)
         name=R.NormalizeName(asset.metadata.name),gender=(asset.metadata.gender=='male' or asset.metadata.gender=='female') and asset.metadata.gender or nil,_assetSnapshot=includeAsset and asset or nil,
         modelKey = row.model_key, operationId = row.origin_operation_id,
         selectionRevision = tonumber(row.selection_revision), projectionRevision = tonumber(row.projection_revision),
-        assetRevision = asset.revision, availability = row.availability })
+        assetRevision = asset.revision, availability = row.availability,biologicalState=row.biological_state })
 end
 
 function R.GetSelected(source)

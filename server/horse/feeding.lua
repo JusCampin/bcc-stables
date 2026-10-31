@@ -10,7 +10,9 @@ local function bad(code,distance)
     v.distance=distance;return v
 end
 local function brushing() return Config.brushing and Config.brushing.enabled==true end
-function P.Enabled() return (Config.feeding and Config.feeding.enabled==true) or brushing() end
+local function injuries() return Stables.Injuries and Stables.Injuries.Enabled() end
+local function purpose(action) return action=='revive' and 'stables.revive.v1' or action=='brush' and 'stables.brush.v1' or 'stables.care.v1' end
+function P.Enabled() return (Config.feeding and Config.feeding.enabled==true) or brushing() or injuries() end
 local function inventory(method,p)
     local ok,v=pcall(function()
         local api=exports['feather-inventory']; return api[method](api,p)
@@ -38,7 +40,8 @@ local function food(name)
     return policy
 end
 local function policy(name)
-    if brushing() and name==Config.items.brush.name then
+    if injuries() and name==Config.items.reviver then return {health=Config.death.reviveHealth,stamina=Config.death.reviveStamina},'revive'
+    elseif brushing() and name==Config.items.brush.name then
         local p=Config.brushing
         if F.IsRevision(p.health) and p.health<=100 and F.IsRevision(p.stamina) and p.stamina<=100 then return p,'brush' end
     elseif Config.feeding and Config.feeding.enabled then return food(name),'feed' end
@@ -67,21 +70,22 @@ local function read(id,tx)
     local row=(tx or DB).one('SELECT * FROM fs_care_operations WHERE operation_id=?'..(tx and ' FOR UPDATE' or ''),id)
     if not row then return nil end
     local ok,q=pcall(json.decode,row.record_json)
-    local action=ok and type(q)=='table' and (q.kind=='brush_v1' and 'brush' or q.kind=='feed_v1' and 'feed')
+    local action=ok and type(q)=='table' and (q.kind=='brush_v1' and 'brush' or q.kind=='feed_v1' and 'feed' or q.kind=='revive_v1' and 'revive')
     if not action or q.id~=id or row.fingerprint~=action..'.v1:'..id
         or q.characterId~=row.character_id or q.horseId~=row.horse_id or not F.IsUuid(q.horseId)
         or not F.IsUuid(q.assetId) or not condition(q.before) or not condition(q.after)
         or q.after.revision~=q.before.revision+1 or q.after.healthCore<q.before.healthCore
         or q.after.staminaCore<q.before.staminaCore or type(q.request)~='table'
         or q.request.operationId~=id or q.request.characterId~=q.characterId
-        or q.request.purpose~=(action=='brush' and 'stables.brush.v1' or 'stables.care.v1')
-        or q.request.effectReference~=q.horseId..':'..action..'.v1:'..q.before.revision
+        or q.request.purpose~=purpose(action)
+        or q.request.effectReference~=q.horseId..':'..action..'.v1:'..(action=='revive' and q.injuryRevision or q.before.revision)
         -- Recovery honors the immutable saved terms, even if food effects change.
         or type(q.request.itemName)~='string' or #q.request.itemName>100 or not q.request.itemName:match('^[a-z0-9_]+$')
         or not F.IsRevision(q.request.instanceId) or q.request.instanceId<1
         or not F.IsRevision(q.request.definitionId) or q.request.definitionId<1 or not F.IsRevision(q.request.expectedRevision) then return nil end
     if action=='brush' and (not F.IsRevision(q.request.wear) or not F.IsRevision(q.request.maximumDurability)
         or q.request.maximumDurability<1 or q.request.maximumDurability>1000000 or q.request.wear>q.request.maximumDurability) then return nil end
+    if action=='revive' and not F.IsRevision(q.injuryRevision) then return nil end
     q.state,q.action=row.state,action
     return q
 end
@@ -95,8 +99,12 @@ local function transaction(character,body)
     end)
     return ok and committed==true and result or (result and not result.ok and result or bad())
 end
-local function eligible(session,r)
-    if not r or r.flee or H.MovementRecord(session)~=r then return false,'care_not_ready' end
+local function eligible(session,r,action)
+    if r and r.training then return false,'training_busy' end
+    if not r or r.flee or r.worldCare or H.MovementRecord(session)~=r then return false,'care_not_ready' end
+    if action=='revive' then
+        if not injuries() or r.injuryPending or r.horse.biologicalState~='downed' then return false,'revive_not_downed' end
+    elseif Stables.Injuries and Stables.Injuries.Blocked(r) then return false,'horse_downed' end
     if r.care and r.care.cancelled then return false,'care_cancelled' end
     if r.movement then return false,'care_moving' end
     local ped=GetPlayerPed(session.source)
@@ -144,7 +152,7 @@ function P.Capture(session,r,observation,authorize,horse)
             (SELECT MAX(e.condition_revision) FROM fs_care_effects e WHERE e.horse_id=c.horse_id) AS last_care_revision
             FROM fs_horse_condition c INNER JOIN fs_horses h ON h.horse_id=c.horse_id
             LEFT JOIN fs_call_slots s ON s.character_id=h.owner_character_id WHERE c.horse_id=? FOR UPDATE]],r.horse.horseId)
-        if not row or row.owner_character_id~=session.characterId or row.biological_state~='alive'
+        if not row or row.owner_character_id~=session.characterId or (row.biological_state~='alive' and row.biological_state~='downed')
             or row.availability~='active' or row.generation_id~=r.id then return bad('care_pending') end
         local c={healthCore=tonumber(row.health_core),staminaCore=tonumber(row.stamina_core),
             revision=tonumber(row.revision),policyRevision=tonumber(row.policy_revision)}
@@ -168,6 +176,44 @@ function P.Capture(session,r,observation,authorize,horse)
     end
     return result
 end
+-- World care uses the same depletion checkpoint, character lock and condition
+-- revision as item care. Its server ticket is single-use; unknown commits stop
+-- the interaction instead of retrying an unreceipted benefit.
+function P.WorldBenefit(session,r,observation,effect,authorize)
+    local captured=P.Capture(session,r,observation,authorize)
+    if not captured.ok or captured.value.deferred then return bad('care_pending') end
+    local before=captured.value.condition
+    if not before then return bad('care_uninitialized') end
+    local health,stamina=math.min(100,before.healthCore+effect.health),math.min(100,before.staminaCore+effect.stamina)
+    if health==before.healthCore and stamina==before.staminaCore then return F.Ok({full=true}) end
+    local result=transaction(session.characterId,function(tx)
+        if not authorize() then return bad('care_stale') end
+        local row=tx.one('SELECT owner_character_id,biological_state,availability FROM fs_horses WHERE horse_id=? FOR UPDATE',r.horse.horseId)
+        local slot=tx.one('SELECT generation_id FROM fs_call_slots WHERE character_id=? FOR UPDATE',session.characterId)
+        if not row or row.owner_character_id~=session.characterId or row.biological_state~='alive' or row.availability~='active'
+            or not slot or slot.generation_id~=r.id or tx.one("SELECT operation_id FROM fs_care_slots WHERE horse_id=? FOR UPDATE",r.horse.horseId) then return bad('care_stale') end
+        local c={healthCore=health,staminaCore=stamina,revision=before.revision+1,policyRevision=1}
+        if tx.exec('UPDATE fs_horse_condition SET health_core=?,stamina_core=?,revision=revision+1 WHERE horse_id=? AND revision=?',
+            health,stamina,r.horse.horseId,before.revision)~=1 then return bad('care_stale') end
+        -- Set before commit: a lost acknowledgement must not let a later stale
+        -- native checkpoint erase a committed benefit before delivery.
+        r.requiredConditionRevision=c.revision
+        local xp
+        if effect.xp>0 then
+            local reward=Stables.Bonding.Care(tx,{horseId=r.horse.horseId,characterId=session.characterId,action='drink',
+                bondingReward=effect.xp,bondingAt=os.time(),bondingCooldown=Config.bonding.careCooldownSeconds})
+            if not reward.ok then return reward end;xp=reward.value
+        end
+        if not authorize() then return bad('care_stale') end
+        return F.Ok({condition=c,bonding=xp})
+    end)
+    if result.ok then
+        if result.value.bonding then Stables.Bonding.Changed(r.horse.horseId) end
+        TriggerClientEvent('bcc-stables:feed:condition',observation.owner,{generationId=r.id,observerId=r.observerId,
+            netId=r.netId,modelKey=r.horse.modelKey,condition=result.value.condition})
+    end
+    return result
+end
 local function reserve(session,r,item,c)
     local id=DB.one('SELECT UUID() AS id')
     if not id or not F.IsUuid(id.id) then return bad() end
@@ -177,13 +223,17 @@ local function reserve(session,r,item,c)
     local q={kind=action..'_v1',action=action,id=id.id,characterId=session.characterId,horseId=r.horse.horseId,assetId=r.horse.assetId,
         before=c,after={healthCore=math.min(100,c.healthCore+health),staminaCore=math.min(100,c.staminaCore+stamina),
             revision=c.revision+1,policyRevision=c.policyRevision}}
-    if Stables.Bonding and Stables.Bonding.Enabled() then
+    if action~='revive' and Stables.Bonding and Stables.Bonding.Enabled() then
         q.bondingReward=Stables.Bonding.Reward(action);q.bondingAt=os.time();q.bondingCooldown=Config.bonding.careCooldownSeconds
     end
     if action=='feed' and q.before.healthCore==q.after.healthCore and q.before.staminaCore==q.after.staminaCore then return bad('care_full') end
     q.request={operationId=q.id,characterId=q.characterId,instanceId=item.id,definitionId=item.definition.id,
-        expectedRevision=item.revision,itemName=item.definition.name,purpose=action=='brush' and 'stables.brush.v1' or 'stables.care.v1',
+        expectedRevision=item.revision,itemName=item.definition.name,purpose=purpose(action),
         effectReference=q.horseId..':'..action..'.v1:'..c.revision}
+    if action=='revive' then
+        q.injuryRevision=r.horse.projectionRevision
+        q.request.effectReference=q.horseId..':revive.v1:'..q.injuryRevision
+    end
     if action=='brush' then
         q.request.wear=Config.items.brush.durabilityEnabled and Config.items.brush.durabilityUsedPerAction or 0
         q.request.maximumDurability=Config.items.brush.maximumDurability
@@ -192,13 +242,14 @@ local function reserve(session,r,item,c)
     end
     pending=true -- Set before committing, including a lost reservation reply.
     return transaction(q.characterId,function(tx)
-        if not eligible(session,r) then return bad('care_ineligible') end
+        if not eligible(session,r,action) then return bad('care_ineligible') end
         local slot=tx.one('SELECT generation_id FROM fs_call_slots WHERE character_id=? FOR UPDATE',q.characterId)
         local lease=tx.one('SELECT state FROM fs_call_leases WHERE generation_id=? FOR UPDATE',r.id)
-        local horse=tx.one('SELECT owner_character_id,biological_state,availability FROM fs_horses WHERE horse_id=? FOR UPDATE',q.horseId)
+        local horse=tx.one('SELECT owner_character_id,biological_state,availability,revision FROM fs_horses WHERE horse_id=? FOR UPDATE',q.horseId)
         local saved=tx.one('SELECT * FROM fs_horse_condition WHERE horse_id=? FOR UPDATE',q.horseId)
         if not slot or slot.generation_id~=r.id or not lease or lease.state~='active' or not horse
-            or horse.owner_character_id~=q.characterId or horse.biological_state~='alive' or horse.availability~='active'
+            or horse.owner_character_id~=q.characterId or horse.biological_state~=(action=='revive' and 'downed' or 'alive') or horse.availability~='active'
+            or (action=='revive' and tonumber(horse.revision)~=q.injuryRevision)
             or not saved or tonumber(saved.revision)~=c.revision or tonumber(saved.health_core)~=c.healthCore
             or tonumber(saved.stamina_core)~=c.staminaCore or tonumber(saved.policy_revision)~=c.policyRevision then return bad() end
         if tx.one("SELECT operation_id FROM fs_care_operations WHERE character_id=? AND state NOT IN ('applied','cancelled') LIMIT 1 FOR UPDATE",q.characterId) then return bad() end
@@ -207,7 +258,7 @@ local function reserve(session,r,item,c)
         assert(tx.exec('INSERT INTO fs_care_slots (horse_id,operation_id) VALUES (?,?)',q.horseId,q.id)==1)
         assert(tx.exec([[INSERT INTO fs_care_targets (operation_id,generation_id,observer_id,network_id,source_id,session_id)
             VALUES (?,?,?,?,?,?)]],q.id,r.id,r.observerId,r.netId,session.source,session.sessionId)==1)
-        if not eligible(session,r) then return bad('care_ineligible') end
+        if not eligible(session,r,action) then return bad('care_ineligible') end
         return F.Ok(q)
     end)
 end
@@ -232,6 +283,7 @@ function P.Settle(id,consume)
         if (q.action=='brush' and not q.receipt) or (q.receipt and (not receipt(q,q.receipt)
             or (q.state=='cancelled')~=(q.receipt.state=='cancelled'))) then return bad() end
         if q.bonding and Stables.Bonding then Stables.Bonding.Changed(q.horseId) end
+        if q.action=='revive' and q.state=='applied' and Stables.Injuries then Stables.Injuries.Changed(q.horseId,q.injuryRevision) end
         return F.Ok(view(q))
     end
     if q.state~='prepared' then return bad() end
@@ -248,6 +300,11 @@ function P.Settle(id,consume)
         if not slot or slot.operation_id~=id then return bad() end
         local state=v.state~='cancelled' and 'applied' or 'cancelled'
         if state=='applied' then
+            if q.action=='revive' then
+                if tx.exec([[UPDATE fs_horses SET biological_state='alive',revision=revision+1
+                    WHERE horse_id=? AND owner_character_id=? AND biological_state='downed' AND revision=?]],
+                    q.horseId,q.characterId,q.injuryRevision)~=1 then return bad('injury_stale') end
+            end
             local c=q.after
             assert(tx.exec([[UPDATE fs_horse_condition SET health_core=?,stamina_core=?,revision=? WHERE horse_id=?
                 AND revision=? AND health_core=? AND stamina_core=? AND policy_revision=?]],c.healthCore,c.staminaCore,c.revision,
@@ -264,6 +321,7 @@ function P.Settle(id,consume)
         return F.Ok(view(q))
     end)
     if settled.ok and settled.value.bonding and Stables.Bonding then Stables.Bonding.Changed(q.horseId) end
+    if settled.ok and settled.value.state=='applied' and q.action=='revive' and Stables.Injuries then Stables.Injuries.Changed(q.horseId,q.injuryRevision) end
     return settled
 end
 function P.Request(source,p,captured,ticket)
@@ -283,7 +341,7 @@ function P.Request(source,p,captured,ticket)
         end
         if not job or job.id~=p.operationId or job.sessionId~=session.sessionId then return bad('care_stale') end
         if p.started~=nil and job.started==nil then job.started=p.started;job.startedAt=GetGameTimer() end
-        if p.cancel==true then job.cancelled=true end
+        if p.cancel==true then job.cancelled=true;job.cancelReason=job.cancelReason or 'client_cancelled' end
         return F.Ok(true)
     end
     if not P.Enabled() then return bad('care_disabled') end
@@ -293,37 +351,51 @@ function P.Request(source,p,captured,ticket)
     local ok,result=pcall(function()
         if not P.Probe().ok then return bad('inventory_unavailable') end
         r=H.MovementRecord(session)
-        local allowed,reason,distance=eligible(session,r)
+        if p.generationId and (not r or r.id~=p.generationId) then return bad('care_stale') end
+        local allowed,reason,distance=eligible(session,r,p.action)
         if not allowed then return bad(reason,distance) end
-        job={sessionId=session.sessionId};jobs[session.characterId]=job;r.care=job
-        local free,why,observation=H.CheckCareOccupancy(session,r)
+        job={sessionId=session.sessionId,action=p.action};jobs[session.characterId]=job;r.care=job
+        local free,why,observation=H.CheckCareOccupancy(session,r,p.action~='revive')
         if not free then return bad(why or 'care_observation_unknown') end
-        allowed,reason,distance=eligible(session,r)
+        allowed,reason,distance=eligible(session,r,p.action)
         if not allowed then return bad(reason,distance) end
         local horse=owned(session,r)
         if not horse or not condition(horse.condition) then return bad('care_uninitialized') end
-        local captured=P.Capture(session,r,observation,function() return eligible(session,r) end,horse)
+        local captured=P.Capture(session,r,observation,function() return eligible(session,r,p.action) end,horse)
         if not captured.ok then return captured end
         horse.condition=captured.value.condition
+        if p.action=='revive' then r.horse.projectionRevision=horse.projectionRevision end
         local item=findItem(session.characterId,p)
         if not item then return bad('care_food_missing') end
         local saved=reserve(session,r,item,horse.condition);if not saved.ok then return saved end
         job.id=saved.value.id
+        local function stillEligible()
+            local allowed,reason=eligible(session,r,p.action)
+            if not allowed then job.cancelReason=job.cancelReason or reason end
+            return allowed
+        end
         TriggerClientEvent('bcc-stables:feed:animate',source,{operationId=job.id,generationId=r.id,netId=r.netId,action=saved.value.action})
         local deadline=GetGameTimer()+5000
         repeat
             Wait(100)
-            if not eligible(session,r) then job.cancelled=true end
+            if not stillEligible() then job.cancelled=true end
         until job.started~=nil or GetGameTimer()>=deadline or job.cancelled
         if job.started==true and not job.cancelled then
             repeat
                 Wait(100)
-                if not eligible(session,r) then job.cancelled=true end
-            until GetGameTimer()>=job.startedAt+5000 or job.cancelled
+                if not stillEligible() then job.cancelled=true end
+            until GetGameTimer()>=job.startedAt+(p.action=='revive' and 5500 or 5000) or job.cancelled
         end
-        local consume=not job.cancelled and job.started==true and eligible(session,r)
-        if consume then consume=H.CheckCareOccupancy(session,r) and owned(session,r)~=nil and eligible(session,r) end
+        local consume=not job.cancelled and job.started==true and stillEligible()
+        if consume then
+            local free,why=H.CheckCareOccupancy(session,r,p.action~='revive')
+            consume=free and owned(session,r)~=nil and stillEligible()
+            if not consume then job.cancelReason=job.cancelReason or why or 'ownership_changed' end
+        end
         local settled=P.Settle(job.id,consume)
+        if p.action=='revive' and settled.ok and settled.value.state=='cancelled' then
+            print('[bcc-stables] revival cancelled; operationId='..job.id..'; reason='..tostring(job.cancelReason or (job.started==false and 'animation_not_started' or 'animation_start_timeout')))
+        end
         if settled.ok and settled.value.state=='applied' and H.MovementRecord(session)==r then
             -- Absolute saved values, exact live generation, current simulator.
             r.requiredConditionRevision=settled.value.condition.revision
@@ -336,6 +408,42 @@ function P.Request(source,p,captured,ticket)
     jobs[session.characterId],working[session.characterId]=nil,nil
     return ok and result or bad()
 end
+-- The native Revive prompt supplies only the current call identity. Inventory
+-- selects an owned instance on the server; no client item IDs/counts are trusted.
+function P.Revive(source,p)
+    local captured=F.RequireSession(source);if not captured.ok then return captured end
+    local session=captured.value
+    local function finish(result)
+        result.action='revive'
+        if F.IsCurrent(session) then TriggerClientEvent('bcc-stables:feed:result',source,result) end
+        return F.Ok(true)
+    end
+    local r=H.MovementRecord(session)
+    if not injuries() or not r or r.id~=p.generationId then return finish(bad('care_stale')) end
+    local allowed,why=eligible(session,r,'revive')
+    if not allowed then return finish(bad(why)) end
+    if working[session.characterId] then return finish(bad('care_busy')) end
+    local ok,item=pcall(function()
+        local api=exports['feather-inventory']:initiate()
+        local inventory=api.GetCharacterInventory(session.characterId)
+        if not inventory.ok then return nil end
+        local items=api.Inventory.GetInventoryItems(inventory.value.id)
+        if not items.ok or type(items.value)~='table' then return nil end
+        for _,row in ipairs(items.value) do
+            if row.name==Config.items.reviver then
+                local current=api.GetItemForCharacter(session.characterId,tonumber(row.id))
+                if current.ok and current.value.definition.name==Config.items.reviver
+                    and current.value.definition.type=='item_item' and current.value.definition.instanceMode=='stack' then
+                    return current.value
+                end
+            end
+        end
+    end)
+    if not ok then return finish(bad('inventory_unavailable')) end
+    if not item then return finish(bad('care_food_missing')) end
+    return finish(P.Request(source,{instanceId=item.id,definitionId=item.definition.id,expectedRevision=item.revision,
+        food=Config.items.reviver,action='revive',generationId=p.generationId},captured))
+end
 -- Inventory releases its active-use guard when this callback RETURNS. Enqueue
 -- first, then re-read the exact instance after yielding one tick; no callback
 -- token/guard bypass or transaction spanning an animation is needed.
@@ -344,7 +452,10 @@ function P.UseItem(item,source)
     if not captured.ok then return F.Ok(false) end
     local session=captured.value
     local function notify(v)
-        if type(item)=='table' and Config.items.brush and item.name==Config.items.brush.name then v.action='brush' end
+        if type(item)=='table' then
+            if Config.items.brush and item.name==Config.items.brush.name then v.action='brush'
+            elseif item.name==Config.items.reviver then v.action='revive' end
+        end
         if F.IsCurrent(session) then TriggerClientEvent('bcc-stables:feed:result',source,v) end
     end
     if not P.Enabled() then notify(bad('care_disabled'));return F.Ok(false) end
@@ -371,7 +482,7 @@ end
 function P.Tick()
     if not pending then return end
     local rows=DB.query([[SELECT operation_id,character_id FROM fs_care_operations
-        WHERE state='prepared' AND (fingerprint LIKE 'feed.v1:%' OR fingerprint LIKE 'brush.v1:%') ORDER BY created_at LIMIT 5]])
+        WHERE state='prepared' AND (fingerprint LIKE 'feed.v1:%' OR fingerprint LIKE 'brush.v1:%' OR fingerprint LIKE 'revive.v1:%') ORDER BY created_at LIMIT 5]])
     if type(rows)~='table' then return end
     if #rows==0 then pending=false;return end
     for _,row in ipairs(rows or {}) do
@@ -402,6 +513,12 @@ function P.Start()
                 names[#names+1]=name
             end
             table.sort(names)
+            if injuries() then
+                local name=Config.items.reviver
+                if type(name)~='string' or #name>100 or not name:match('^[a-z0-9_]+$') then return bad('invalid_reviver_policy') end
+                for _,other in ipairs(names) do if other==name then return bad('invalid_reviver_policy') end end
+                names[#names+1]=name
+            end
             for _,name in ipairs(names) do
                 local registered=api.Items.RegisterUsableItem(name,P.UseItem,GetCurrentResourceName())
                 if type(registered)~='table' or not registered.ok then return bad('food_registration_conflict') end
@@ -421,6 +538,14 @@ function P.Start()
             return false -- New feeding begins only through Inventory's server callback.
         end})
     if not installed.ok then return installed end
+    local revive=F.Call('feather-core','RegisterRpc','stables.horses.call.revive.v1',function(p,source) return P.Revive(source,p) end,{
+        contract=1,direction='client_to_server',requireCharacter=true,windowMs=2000,maxCalls=2,maxPayloadBytes=64,maxDepth=2,maxNodes=3,
+        validatePayload=function(p)
+            if type(p)~='table' or not F.IsUuid(p.generationId) then return false end
+            for key in pairs(p) do if key~='generationId' then return false end end
+            return true
+        end})
+    if not revive.ok then return revive end
     CreateThread(function() while true do Wait(10000);pcall(P.Tick) end end)
     return F.Ok(true)
 end

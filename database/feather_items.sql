@@ -11,14 +11,15 @@ FROM (
     UNION ALL SELECT 'consumable_carrots', 'Carrots', 'Carrots for feeding horses.', 10, 10, 0.20, 1
     UNION ALL SELECT 'consumable_apple', 'Apple', 'An apple for feeding horses.', 10, 10, 0.20, 1
     UNION ALL SELECT 'oil_lantern', 'Oil Lantern', 'A portable light source.', 1, 1, 1.00, 0
-    UNION ALL SELECT 'consumable_horse_reviver', 'Horse Reviver', 'Curative compound for an injured horse.', 3, 3, 0.50, 0
+    UNION ALL SELECT 'consumable_horse_reviver', 'Horse Reviver', 'Curative compound for an injured horse.', 3, 3, 0.50, 1
     UNION ALL SELECT 'diamond', 'Diamond', 'A precious gemstone.', 20, 10, 0.05, 0
 ) seed JOIN categories c ON c.name='Stables' WHERE 1=1
 ON DUPLICATE KEY UPDATE name=VALUES(name);
 COMMIT;
 -- Brush units need independent slots for different durability metadata. Fresh
 -- brushes use max_stack_size=1; split existing multi-brush stacks before use.
--- Lantern/reviver/diamond are defined for preserved configuration, but their
--- gameplay remains disabled. Registering a definition does not enable its use.
+-- Lantern/diamond gameplay remains disabled. Reviver use also requires the
+-- injury feature and Inventory purpose grant. Existing definitions are preserved;
+-- run feather_injuries.sql to enable the previously seeded reviver's Use action.
 SELECT name, type, instance_mode, max_stack_size, usable FROM items WHERE name IN
 ('horsebrush', 'consumable_haycube', 'consumable_carrots', 'consumable_apple', 'oil_lantern', 'consumable_horse_reviver', 'diamond');

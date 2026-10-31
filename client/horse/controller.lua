@@ -30,6 +30,7 @@ local function releaseLead(r)
     if yes(leading) and horse == r.entity then Citizen.InvokeNative(0xED27560703F37258, r.ped) end
 end
 local function clear(r, deleteLocal)
+    if Stables.HorseInjuries then Stables.HorseInjuries.Forget(r.generationId) end
     r.cancelled = true
     retire(r.generationId)
     if same(r) then
@@ -60,7 +61,7 @@ end
 local function initialize(r)
     SetEntityVisible(r.entity, false)
     FreezeEntityPosition(r.entity, true)
-    SetEntityInvincible(r.entity, true) -- Damage/death policy is not enabled in this integration slice.
+    SetEntityInvincible(r.entity, true) -- Spawn protection; enabled injury monitoring releases it after binding.
     SetBlockingOfNonTemporaryEvents(r.entity, true)
     Citizen.InvokeNative(0x283978A15512B2FE, r.entity, true)
     local p = GetEntityCoords(r.entity)
@@ -89,7 +90,7 @@ local function initialize(r)
     end
     error('Horse did not settle on loaded ground')
 end
-local function ready(r, condition, tack, bonding)
+local function ready(r, condition, tack, bonding, biologicalState)
     assert(usable(r) and PlayerPedId() == r.ped, 'Horse control or character changed')
     -- Outfit initialization and settling have completed before applying sex.
     if r.gender == 'male' or r.gender == 'female' then
@@ -139,7 +140,9 @@ local function ready(r, condition, tack, bonding)
     -- Honor the native target-menu Flee setting independently of Cargo.
     Citizen.InvokeNative(0xA3DB37EDF9A74635,r.player,r.entity,33,1,not (Config.stable and Config.stable.fleeEnabled==true))
     r.bound = true
-    C.Message('horse ready; riding and native leading enabled.')
+    if Stables.HorseInjuries then Stables.HorseInjuries.Bind(r,biologicalState) end
+    if biologicalState=='downed' then (C.Notify or C.Message)(C.Text('menu_horseDowned'))
+    else C.Message('horse ready; riding and native leading enabled.') end
     if condition and Config.feeding and Config.feeding.enabled then
         C.Message(C.Text('menu_feedSaved', condition.healthCore, condition.staminaCore, condition.revision))
     end
@@ -205,7 +208,7 @@ RegisterNetEvent('bcc-stables:call:create', function(spec)
                 and bound.value.generationId == r.generationId and bound.value.netId == r.netId
                 and bound.value.horseId == r.horseId, 'Horse binding refused: ' .. tostring(bound.code))
             if active ~= r or r.cancelled then return end
-            ready(r, bound.value.condition, bound.value.tack,bound.value.bonding)
+            ready(r, bound.value.condition, bound.value.tack,bound.value.bonding,bound.value.biologicalState)
         end)
         if r.hash then SetModelAsNoLongerNeeded(r.hash) end
         if not ok then
@@ -237,6 +240,7 @@ RegisterNetEvent('bcc-stables:call:store_check', function(p)
             end
             if not valid() then return end
             local reply={generationId=p.generationId,sequence=p.sequence}
+            if Stables.HorseInjuries and Stables.HorseInjuries.Enabled() then reply.injured=Stables.HorseInjuries.Injured(entity) end
             if p.care==true then
                 if type(p.targetNet)~='number' or p.targetNet<1 or p.targetNet%1~=0 then return end
                 local owner=NetworkGetEntityFromNetworkId(p.targetNet)
@@ -309,6 +313,7 @@ end
 
 function H.Lead()
     local r = active
+    if r and Stables.HorseInjuries and Stables.HorseInjuries.Blocked(r.generationId) then return false end
     if busy or not r or not r.bound or not usable(r) or PlayerPedId() ~= r.ped then return false end
     local leading = Citizen.InvokeNative(0xEFC4303DDC6E60D3, r.ped)
     local horse = Citizen.InvokeNative(0xED1F514AF4732258, r.ped, Citizen.ResultAsInteger())

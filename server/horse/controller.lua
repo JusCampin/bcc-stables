@@ -39,9 +39,14 @@ local function saveStopProofs()
     for _,proof in pairs(pendingProofs) do journal.entries[#journal.entries+1]=proof end
     if epoch and GetConvar(PROCESS,'')==epoch then SetConvar(STOP_PROOFS,json.encode(journal)) end
 end
-local function cancel(r)
+local function cancel(r,stopping)
     r.cancelled = true
+    -- Resource stop cannot yield to SQL before saving native deletion evidence.
+    -- Training.Start cancels unfinished persisted sessions after restart.
+    if Stables.Training and not stopping then pcall(Stables.Training.Cancel,r) end
+    if Stables.Injuries then Stables.Injuries.Forget(r) end
     if Stables.Bonding then Stables.Bonding.Forget(r) end
+    if Stables.WorldCare then Stables.WorldCare.Stop(r) end
     if r.care then r.care.cancelled=true end
     if C.CancelMovement then C.CancelMovement(r) end
     TriggerClientEvent('bcc-stables:call:cancel', r.session.source, r.id)
@@ -327,8 +332,10 @@ function C.Bind(source, p)
         r.tack=tack.value
         r.bonding=bound.value.bonding or owned.value.bonding
         r.phase='active'
+        r.horse.biologicalState=owned.value.biologicalState or 'alive'
+        r.horse.projectionRevision=owned.value.projectionRevision
         r.requiredConditionRevision=owned.value.condition and owned.value.condition.revision or 0
-        return F.Ok({generationId=r.id,horseId=r.horse.horseId,state='active',netId=r.netId,condition=owned.value.condition,tack=tack.value,bonding=r.bonding})
+        return F.Ok({generationId=r.id,horseId=r.horse.horseId,state='active',netId=r.netId,condition=owned.value.condition,tack=tack.value,bonding=r.bonding,biologicalState=r.horse.biologicalState})
     end)
     r.busy=false
     if not called then result=F.Error('call_outcome_unknown','Binding interrupted; the call remains reserved.') end
@@ -344,6 +351,15 @@ function C.OccupancyResult(source,p)
         if r.id==p.generationId and ticket and ticket.owner==source and ticket.sequence==p.sequence
             and GetGameTimer()<=ticket.expires and ticket.reply==nil and same(r)
             and NetworkGetEntityOwner(r.entity)==source then
+            if Stables.Injuries and Stables.Injuries.Enabled() then
+                if type(p.injured)~='boolean' then return F.Error('injury_unknown','Current injury observation required.') end
+                if p.injured and r.horse.biologicalState~='downed' then
+                    local saved=Stables.Injuries.Down(r,function()
+                        return r.storeCheck==ticket and same(r) and F.IsCurrent(r.session) and NetworkGetEntityOwner(r.entity)==source
+                    end)
+                    if not saved.ok then return saved end
+                end
+            end
             if ticket.care and (type(p.ownerAlive)~='boolean' or type(p.horseAlive)~='boolean') then
                 return F.Error('invalid_input','Care life observation required.')
             end
@@ -368,6 +384,11 @@ function C.Store(source,relocationGeneration,expectedGeneration,flee)
     local r=records[session.characterId]
     if not r then return F.Error('call_not_observed','No live horse observer; saved identities will not be deleted.') end
     if expectedGeneration and r.id~=expectedGeneration then return F.Error('stale_call','The target horse changed; current horse retained.') end
+    if r.training then
+        if r.session.sessionId~=session.sessionId then return F.Error('busy','A horse operation is finishing.') end
+        if r.training.state~='active' or r.training.working then return F.Error('training_pending','Training payment/reward is finishing.') end
+        Stables.Training.Cancel(r)
+    end
     if flee then
         if not Config.stable.fleeEnabled then return F.Error('flee_disabled','Horse flee is disabled.') end
         if r.flee then return F.Ok({generationId=r.id,state='fleeing'}) end
@@ -376,6 +397,7 @@ function C.Store(source,relocationGeneration,expectedGeneration,flee)
     if r.busy or r.session.sessionId~=session.sessionId then return F.Error('busy','A horse operation is finishing.') end
     if r.cancelled then return cleanup(r) end
     if r.phase~='active' or not same(r) then return F.Error('horse_not_ready','Wait for your horse before storing it.') end
+    if Stables.WorldCare then Stables.WorldCare.Stop(r) end
     r.busy=true
     local called,result=pcall(function()
         local owner=NetworkGetEntityOwner(r.entity)
@@ -451,7 +473,10 @@ function C.Tick()
                     end
                 end
                 if not r.cancelled and C.MovementTick then C.MovementTick(r) end
+                if not r.cancelled and Stables.Training then Stables.Training.Tick(r) end
+                if not r.cancelled and Stables.Injuries then Stables.Injuries.Tick(r) end
                 if not r.cancelled and Stables.Bonding then pcall(Stables.Bonding.Tick,r) end
+                if not r.cancelled and Stables.WorldCare then Stables.WorldCare.Tick(r) end
             end)
             if not called then cancel(r) end
         end
@@ -477,7 +502,7 @@ function C.Stop()
     running,draining=false,true
     for _,r in pairs(records) do
         pcall(function()
-            cancel(r)
+            cancel(r,true)
             if not r.entity then adopt(r) end
             if same(r) then
                 DeleteEntity(r.entity)
@@ -600,7 +625,7 @@ function C.Install()
                 for key in pairs(p) do
                     if key~='generationId' and (action=='bind' and key~='netId' or action=='accept' and key~='observerId'
                         or action=='store_check_result' and key~='sequence' and key~='occupied' and key~='ownerAlive' and key~='horseAlive'
-                            and key~='healthCore' and key~='staminaCore' and key~='appliedRevision') then return false end
+                            and key~='healthCore' and key~='staminaCore' and key~='appliedRevision' and key~='injured') then return false end
                 end
                 if action=='bind' then return type(p.netId)=='number' and p.netId%1==0 and p.netId>0 and p.netId<=2147483647 end
                 if action=='accept' then return F.IsUuid(p.observerId) end
@@ -609,6 +634,7 @@ function C.Install()
                     and (p.healthCore==nil or (F.IsRevision(p.healthCore) and p.healthCore<=100))
                     and (p.staminaCore==nil or (F.IsRevision(p.staminaCore) and p.staminaCore<=100))
                     and (p.appliedRevision==nil or F.IsRevision(p.appliedRevision))
+                    and (p.injured==nil or type(p.injured)=='boolean')
             end
         })
         if not result.ok then return result end

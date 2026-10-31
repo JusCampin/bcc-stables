@@ -50,7 +50,7 @@ function D.IncomingCount(tx,character)
 end
 local function capacity(tx,character)
     local count=tx.one([[SELECT
-        (SELECT COUNT(*) FROM fs_horses WHERE owner_character_id=? AND biological_state='alive' AND availability<>'sold')+
+        (SELECT COUNT(*) FROM fs_horses WHERE owner_character_id=? AND biological_state IN ('alive','downed') AND availability<>'sold')+
         (SELECT COUNT(*) FROM fs_operations WHERE character_id=? AND state IN ('payment_pending','paid')) AS total]],character,character)
     local limit=tonumber(Config.horseLimits.player)
     return count and F.IsRevision(tonumber(count.total)) and F.IsRevision(limit) and limit>0

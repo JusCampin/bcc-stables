@@ -473,3 +473,33 @@ User previously confirmed the dedicated stable horse-sales page looks good.
 
 
 2026-10-30 commit preparation: the working tree since d3583b6 includes unique-piece saddlebag storage/native Cargo access, original-native Flee followed by safe cleanup, stable horse buy-back, free/paid player horse trades with optional equipped tack and bag contents, saved bonding XP and capped permanent stat rewards. All 421 automated Stables checks passed. User confirmed baseline progression reward/display/restart persistence and final disappearance; see the integration log for separate unverified native/migration gates. README now reflects those live results. Include the new runtime, SQL and test files alongside tracked changes; no version bump, staging, commit or push was performed.
+
+
+2026-10-30: XP/level messages now use shared optional Notify presentation. World care reuses the existing nearby input reader/controller tick and native condition adapter, with action-scoped simulator workers and one-use observations. Server-timed natural drinking/rest/sleep benefits commit through existing condition revisions; drink XP/cooldown is atomic with its benefit. Wallow is animation-only. New last_drink_at column is additive optional SQL; default disabled. No provider changes or idle polling loop added. 440 tests pass; live acceptance pending. See FEATHER_INTEGRATION.md for policy, boundaries and deployment.
+
+
+2026-10-30 correction: World care now follows original transition loading/duration/targeting flags and exit-before-clear behavior. Actions live in the native target group, without an extra Stand/Wake control. A current-simulator exit acknowledgement gates deferred mounting and queued whistle movement; stale or timed-out acknowledgements cannot mount. Original start-time water context is retained within server-anchored care. 450 tests pass; corrected live native behavior pending. See FEATHER_INTEGRATION.md for the five-file retest handoff; no manifest/config/SQL change.
+
+
+2026-10-30: Care transitions hold their last pose across task handoffs and use frame precision at the end of entry. Prompt input-type ordering is explicit and registration completes before accepting input; original U/V/Z/C bindings remain. 452 tests pass; live smoothness/order pending. Incremental deployment is client/horse/passive_care.lua only; no schema/config/manifest change.
+
+### Recovery-only injury policy (2026-10-30)
+
+Active horse damage is now optional through Config.death.enabled. The simulator
+reports lethal/writhe observations against an exact live call; fs_horses stores
+alive/downed plus its revision. A revive operation pins that revision and uses
+Feeding's existing prepared/terminal receipt and slot transaction, including its
+lost-acknowledgement recovery. Native recovery matches an injury-revision marker.
+No new injury ledger, proof command family or schema migration was introduced.
+The inactive legacy death modules remain unloaded. Permanent death, aging and
+retirement remain deferred. 471 offline tests pass; live acceptance is pending.
+### Integrated NPC training completion
+
+TrainingCourse shares surveyed geometry; Training owns the server course timer,
+checkpoint sequence and current-simulator observation tickets. The optional
+fs_training_sessions row is both the immutable completion/payment evidence and
+XP replay fence. Economy calls stay outside SQL transactions; Bonding.Course
+updates the existing XP/rank snapshot in the terminal transaction. An unfinished
+course has no payment obligation. A completed obligation survives restart and
+blocks call/stable admission until resolved. No second XP pool or native core
+refill is introduced. Player-trainer job/consent/payment flows remain deferred.
